@@ -1,1 +1,37 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"asistencia-personal-b0674","appId":"1:125091434839:android:179e7677d7f17eeb4a2e12","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"asistencia-personal-b0674","configurations":{"android":"1:125091434839:android:179e7677d7f17eeb4a2e12","ios":"1:125091434839:ios:663c8b39f18353ae4a2e12","web":"1:125091434839:web:d6bf8f412cb0e10f4a2e12"}}}}}}
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "asistencia-personal-b0674",
+          "appId": "1:125091434839:android:179e7677d7f17eeb4a2e12",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "asistencia-personal-b0674",
+          "configurations": {
+            "android": "1:125091434839:android:179e7677d7f17eeb4a2e12",
+            "ios": "1:125091434839:ios:663c8b39f18353ae4a2e12",
+            "web": "1:125091434839:web:d6bf8f412cb0e10f4a2e12"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}
