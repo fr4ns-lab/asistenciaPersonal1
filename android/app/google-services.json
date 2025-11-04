@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "125091434839",
+    "project_id": "asistencia-personal-b0674",
+    "storage_bucket": "asistencia-personal-b0674.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:125091434839:android:179e7677d7f17eeb4a2e12",
+        "android_client_info": {
+          "package_name": "com.lasalle.asistenciapersonal1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB4_KsvvXxAKLhJP6N4PkOf5BTdzyC1hSY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
