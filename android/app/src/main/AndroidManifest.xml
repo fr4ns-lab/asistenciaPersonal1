@@ -5,6 +5,8 @@
         android:label="asistenciapersonal1"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <meta-data android:name="com.google.android.geo.API_KEY"
+             android:value="AIzaSyCEH1zI3T50-TRb4Oq_A5YWhdIXxuXfJG8" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -12,7 +12,20 @@
           "package_name": "com.lasalle.asistenciapersonal1"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "125091434839-0i1bbd1m2nt8dja377sdahust5ckoh9s.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lasalle.asistenciapersonal1",
+            "certificate_hash": "d094947961e7696b1016e3149fc422d8c1db5d1a"
+          }
+        },
+        {
+          "client_id": "125091434839-l0jruav6pjohehn3t1imjvge46pdde4j.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyB4_KsvvXxAKLhJP6N4PkOf5BTdzyC1hSY"
@@ -20,7 +33,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "125091434839-l0jruav6pjohehn3t1imjvge46pdde4j.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "125091434839-0up29i794mfc56p2iutuibi7rij4mpuj.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.lasalle.asistenciapersonal1"
+              }
+            }
+          ]
         }
       }
     }
