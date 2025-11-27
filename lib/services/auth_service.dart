@@ -1,9 +1,7 @@
 // lib/services/auth_service.dart
 import 'dart:io';
 
-import 'package:asistenciapersonal1/pages/home_page.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -19,10 +17,10 @@ class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  // ✅ v7.2.0: se usa el singleton
   final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
-
   bool _googleInitialized = false;
+
+  // ==================== HELPERS ====================
 
   Future<String?> _getDniFromEmail(String? email) async {
     if (email == null || email.isEmpty) return null;
@@ -35,6 +33,33 @@ class AuthService {
     final data = doc.data();
     return data?['dni'] as String?;
   }
+
+  Future<String> _getDeviceId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      final saved = prefs.getString(_deviceIdKey);
+      if (saved != null && saved.isNotEmpty) {
+        return saved;
+      }
+
+      final newId = _uuid.v4();
+      await prefs.setString(_deviceIdKey, newId);
+      return newId;
+    } catch (_) {
+      return 'temp_${DateTime.now().millisecondsSinceEpoch}';
+    }
+  }
+
+  void _showSnack(BuildContext context, String message) {
+    if (!context.mounted) return;
+    debugPrint(message);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  // ==================== LOGIN CON GOOGLE ====================
 
   Future<void> signInWithGoogle(BuildContext context) async {
     try {
@@ -58,38 +83,12 @@ class AuthService {
         return;
       }
 
-      final googleAuth = await googleUser.authentication;
-
-      final credential = GoogleAuthProvider.credential(
-        idToken: googleAuth.idToken,
-      );
-
-      final userCred = await _auth.signInWithCredential(credential);
-      final user = userCred.user;
-
-      if (user == null) {
-        _showSnack(context, 'No se pudo obtener el usuario de Firebase.');
-        return;
-      }
-
-      // 🔴🔴🔴 VALIDAR DOMINIO AQUÍ 🔴🔴🔴
+      // ⚠️ VALIDAR DOMINIO ANTES DE IR A FIREBASE
       const allowedDomain = 'lasalle.edu.pe';
-
-      final email = user.email ?? '';
+      final email = googleUser.email;
       final domain = email.split('@').length == 2 ? email.split('@')[1] : '';
 
       if (domain.toLowerCase() != allowedDomain.toLowerCase()) {
-        // Opcional: borrar el usuario recién creado en Firebase Auth
-        try {
-          await user.delete();
-        } catch (_) {
-          // si falla delete, igual cerramos sesión
-        }
-
-        // cerrar sesión en Firebase y Google
-        await _auth.signOut();
-        await _googleSignIn.disconnect();
-
         if (context.mounted) {
           await showDialog(
             context: context,
@@ -110,26 +109,38 @@ class AuthService {
           );
         }
 
-        return; // 🚫 no seguimos a _enforceSingleDevice
+        await _googleSignIn.disconnect();
+        return;
       }
 
-      // ✅ Si el dominio es válido, seguimos con la lógica de 1 solo dispositivo
-      await _enforceSingleDevice(context, user);
+      // 👉 Si el dominio es válido recién ahora vamos a FirebaseAuth
+      final googleAuth = await googleUser.authentication;
+
+      final credential = GoogleAuthProvider.credential(
+        idToken: googleAuth.idToken,
+      );
+
+      await _auth.signInWithCredential(credential);
+      // A partir de aquí, RootPage se entera de que hay usuario y hará
+      // verifyAccessForUser(user) antes de mostrar la pantalla de marcación.
     } catch (e) {
       _showSnack(context, 'Error al iniciar sesión: $e');
     }
   }
 
-  Future<void> _enforceSingleDevice(BuildContext context, User user) async {
+  // ==================== VERIFICAR ACCESO (DNI + DISPOSITIVO) ====================
+
+  /// Devuelve true si el usuario puede usar la app en este dispositivo.
+  /// Devuelve false si se bloquea (sin DNI o en otro dispositivo).
+  Future<bool> verifyAccessForUser(BuildContext context, User user) async {
     final deviceId = await _getDeviceId();
     final docRef = _db.collection('users').doc(user.uid);
     final doc = await docRef.get();
-    // 🔹 Buscar DNI por correo
+
+    // 1) Buscar DNI
     final dni = await _getDniFromEmail(user.email);
     if (dni == null) {
-      await _auth.signOut();
-      await _googleSignIn.disconnect();
-
+      // 🔹 Primero mostramos el mensaje
       if (context.mounted) {
         await showDialog(
           context: context,
@@ -143,95 +154,67 @@ class AuthService {
               ),
         );
       }
-      return;
+
+      // 🔹 Luego cerramos sesión
+      await _auth.signOut();
+      await _googleSignIn.disconnect();
+
+      return false;
     }
 
+    // 2) Primera vez o sin deviceId -> asociar este dispositivo
     if (!doc.exists || doc.data()?['deviceId'] == null) {
-      // Primera vez: asociar este dispositivo
       await docRef.set({
         'email': user.email,
         'name': user.displayName,
         'deviceId': deviceId,
-        'dni': dni, // 👈 guardamos el DNI
+        'dni': dni,
         'lastLogin': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
       _showSnack(context, 'Inicio de sesión correcto.');
-      _navigateToHome(context);
-      return;
+      return true;
     }
 
     final savedDeviceId = doc.data()!['deviceId'] as String;
 
+    // 3) Mismo dispositivo -> permitir
     if (savedDeviceId == deviceId) {
-      // Mismo dispositivo -> permitir
       await docRef.update({
         'lastLogin': FieldValue.serverTimestamp(),
-        'dni': dni, // por si actualizaste el mapeo
+        'dni': dni,
       });
       _showSnack(context, 'Bienvenido nuevamente.');
-      _navigateToHome(context);
-    } else {
-      // Otro dispositivo -> BLOQUEAR
-      await _auth.signOut();
-      await _googleSignIn.disconnect();
+      return true;
+    }
 
-      if (context.mounted) {
-        await showDialog(
-          context: context,
-          builder:
-              (_) => AlertDialog(
-                title: const Text('Acceso restringido'),
-                content: const Text(
-                  'Esta cuenta ya está asociada a otro dispositivo.\n\n'
-                  'Para usarla en este celular/computadora, '
-                  'debes comunicarte con el administrador del sistema.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Entendido'),
-                  ),
-                ],
+    // 4) Otro dispositivo -> BLOQUEAR
+    // 🔹 Primero mostramos el mensaje
+    if (context.mounted) {
+      await showDialog(
+        context: context,
+        builder:
+            (_) => AlertDialog(
+              title: const Text('Acceso restringido'),
+              content: const Text(
+                'Esta cuenta ya está asociada a otro dispositivo.\n\n'
+                'Para usarla en este celular/computadora, '
+                'debes comunicarte con el administrador del sistema.',
               ),
-        );
-      }
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Entendido'),
+                ),
+              ],
+            ),
+      );
     }
-  }
 
-  Future<String> _getDeviceId() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
+    // 🔹 Luego cerramos sesión
+    await _auth.signOut();
+    await _googleSignIn.disconnect();
 
-      // 1. Si ya tengo un ID guardado, lo uso
-      final saved = prefs.getString(_deviceIdKey);
-      if (saved != null && saved.isNotEmpty) {
-        return saved;
-      }
-
-      // 2. Si no existe, genero uno nuevo y lo guardo
-      final newId = _uuid.v4();
-      await prefs.setString(_deviceIdKey, newId);
-      return newId;
-    } catch (_) {
-      // Si algo falla, genero uno “temporal” (no persistente)
-      return 'temp_${DateTime.now().millisecondsSinceEpoch}';
-    }
-  }
-
-  void _navigateToHome(BuildContext context) {
-    // TODO: reemplaza por tu pantalla principal
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const HomePage()),
-    );
-  }
-
-  void _showSnack(BuildContext context, String message) {
-    if (!context.mounted) return;
-    print(message);
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    return false;
   }
 }

@@ -1,6 +1,5 @@
 import 'package:asistenciapersonal1/firebase_options.dart';
-import 'package:asistenciapersonal1/pages/home_page.dart';
-import 'package:asistenciapersonal1/pages/login_page.dart';
+import 'package:asistenciapersonal1/pages/roots_page.dart';
 import 'package:asistenciapersonal1/theme/app_theme.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
@@ -19,7 +18,9 @@ class AsistenciaApp extends StatelessWidget {
       title: "Módulo de asistencia",
       debugShowCheckedModeBanner: false,
       theme: AppTheme.theme,
-      home: LoginPage(),
+      home: RootPage(),
+      // home: MarcacionPage(),
+      // home: LoginPage(),
     );
   }
 }
