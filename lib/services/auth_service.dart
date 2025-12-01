@@ -54,9 +54,9 @@ class AuthService {
   void _showSnack(BuildContext context, String message) {
     if (!context.mounted) return;
     debugPrint(message);
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
   }
 
   // ==================== LOGIN CON GOOGLE ====================

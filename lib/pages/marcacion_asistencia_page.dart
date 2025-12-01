@@ -76,6 +76,17 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     }
   }
 
+  Future<void> _initLocationTracking() async {
+    // 1) Cargar geocerca
+    await _loadGeofence();
+
+    // 2) Obtener ubicación inicial
+    await _locateAndCheck();
+
+    // 3) Empezar a escuchar cambios de ubicación
+    _listenPosition();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -84,9 +95,9 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     _startClock();
     _initUserData();
 
-    // Cargar geocerca; el ajuste de cámara y ubicación se hará
-    // cuando el mapa esté listo (onMapCreated).
-    _loadGeofence();
+    // Antes solo llamabas _loadGeofence();
+    // Ahora delegamos todo en este método:
+    _initLocationTracking();
   }
 
   @override
@@ -133,13 +144,44 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
 
     final uid = user.uid;
     final doc = await _db.collection('users').doc(uid).get();
+    final data = doc.data();
 
     if (!mounted) return;
+
     setState(() {
       _email = user.email;
-      _nombre = user.displayName ?? doc.data()?['name'];
-      _dni = doc.data()?['dni'];
+      _nombre = user.displayName ?? data?['name'];
+      _dni = data?['dni'];
+
+      // 👇 Nuevo: recuperar última marcación persistida (si existe)
+      final lastType = data?['lastMarkType'] as String?;
+      final lastTimeTS = data?['lastMarkTime']; // puede ser Timestamp o null
+
+      if (lastType != null && lastTimeTS is Timestamp) {
+        _lastMarkType = lastType;
+        _lastMarkTime = lastTimeTS.toDate();
+      }
     });
+  }
+
+  String _nextMarkTypeFor(DateTime now) {
+    if (_lastMarkTime == null) {
+      // nunca ha marcado (o no tenemos registro)
+      return 'entrada';
+    }
+
+    final sameDay =
+        _lastMarkTime!.year == now.year &&
+        _lastMarkTime!.month == now.month &&
+        _lastMarkTime!.day == now.day;
+
+    if (!sameDay) {
+      // nuevo día => empezamos siempre con entrada
+      return 'entrada';
+    }
+
+    // mismo día => alternar
+    return _lastMarkType == 'entrada' ? 'salida' : 'entrada';
   }
 
   // ----------------- GEOFERNCE DESDE FIRESTORE -----------------
@@ -255,6 +297,24 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     }
   }
 
+  double _distanceToPolygon(Position pos) {
+    if (_polygon.isEmpty) return 0;
+
+    double minDist = double.infinity;
+
+    for (final v in _polygon) {
+      final d = Geolocator.distanceBetween(
+        pos.latitude,
+        pos.longitude,
+        v.latitude,
+        v.longitude,
+      );
+      if (d < minDist) minDist = d;
+    }
+
+    return minDist;
+  }
+
   // ----------------- PERMISOS / POSICIÓN -----------------
   Future<bool> _ensurePermissions() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -336,7 +396,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     if (_accuracyMax != null && pos.accuracy > _accuracyMax!) {
       try {
         pos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
+          desiredAccuracy: LocationAccuracy.bestForNavigation,
           timeLimit: const Duration(seconds: 5),
         );
       } catch (_) {}
@@ -354,13 +414,15 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     _position = pos;
     _inside = nowInside;
 
-    final center = _polygonCenter();
-    _distanceToCenter = Geolocator.distanceBetween(
-      pos.latitude,
-      pos.longitude,
-      center.latitude,
-      center.longitude,
-    );
+    if (_polygon.isNotEmpty) {
+      if (_inside == true) {
+        // Si está dentro, consideramos distancia 0 (no tiene sentido decirle que está a X m)
+        _distanceToCenter = 0;
+      } else {
+        // Si está fuera, calculamos la distancia al perímetro (aprox. al vértice más cercano)
+        _distanceToCenter = _distanceToPolygon(pos);
+      }
+    }
 
     // Mover cámara si el mapa sigue vivo
     if (_mapCtrl != null) {
@@ -405,13 +467,13 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       _position = pos;
       _inside = nowInside;
 
-      final center = _polygonCenter();
-      _distanceToCenter = Geolocator.distanceBetween(
-        pos.latitude,
-        pos.longitude,
-        center.latitude,
-        center.longitude,
-      );
+      if (_polygon.isNotEmpty) {
+        if (_inside == true) {
+          _distanceToCenter = 0;
+        } else {
+          _distanceToCenter = _distanceToPolygon(pos);
+        }
+      }
 
       if (!mounted) return;
 
@@ -478,10 +540,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
             ),
           ),
         );
-        // Si quieres redirigir automáticamente:
-        // Navigator.of(context).pushReplacement(
-        //   MaterialPageRoute(builder: (_) => const LoginPage()),
-        // );
       }
       return;
     }
@@ -504,7 +562,36 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     });
 
     try {
-      // Actualizar ubicación y estado de geocerca antes de marcar
+      // Hora consistente con NTP si tienes offset
+      final nowDevice = DateTime.now();
+      final now =
+          _serverOffset != null ? nowDevice.add(_serverOffset!) : nowDevice;
+
+      final nextType = _nextMarkTypeFor(now);
+
+      // 👮‍♂️ (opcional) Regla: máximo ENTRADA + SALIDA por día
+      if (_lastMarkTime != null) {
+        final sameDay =
+            _lastMarkTime!.year == now.year &&
+            _lastMarkTime!.month == now.month &&
+            _lastMarkTime!.day == now.day;
+
+        if (sameDay && _lastMarkType == 'salida') {
+          // ya tuvo salida hoy
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Ya registraste ENTRADA y SALIDA hoy. No se permiten más marcaciones.',
+                ),
+              ),
+            );
+          }
+          return;
+        }
+      }
+
+      // Actualizar ubicación antes de marcar
       await _locateAndCheck();
 
       final pos = _position;
@@ -516,7 +603,8 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
             SnackBar(
               content: Text(
                 'Estás fuera del área permitida.\n'
-                'Distancia aprox.: ${_distanceToCenter?.toStringAsFixed(1) ?? '-'} m',
+                'Distancia aprox. al perímetro: '
+                '${_distanceToCenter?.toStringAsFixed(1) ?? '-'} m',
               ),
             ),
           );
@@ -524,24 +612,32 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
         return;
       }
 
-      final tipo = _nextMarkType();
-
-      // 👉 Mandar a tu API de Biotime (ahora con TransactionApi)
+      // 👉 Enviar a Biotime
       await _enviarMarcacionBiotime(
-        empCode: _dni!, // asumimos que emp_code = DNI
+        empCode: _dni!,
         lat: pos.latitude,
         lng: pos.longitude,
       );
 
+      // 👉 Guardar nueva última marcación en memoria y en Firestore
+      final uid = user.uid;
+      await _db.collection('users').doc(uid).update({
+        'lastMarkType': nextType,
+        'lastMarkTime': Timestamp.fromDate(now),
+      });
+
       if (!mounted) return;
 
       setState(() {
-        _lastMarkType = tipo;
-        _lastMarkTime = DateTime.now();
+        _lastMarkType = nextType;
+        _lastMarkTime = now;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Marcación de $tipo registrada correctamente.')),
+        SnackBar(
+          content: Text('Marcación de $nextType registrada correctamente.'),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -562,7 +658,10 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final pos = _position;
-    final nextType = _nextMarkType();
+    final deviceNow = DateTime.now();
+    final logicalNow =
+        _serverOffset != null ? deviceNow.add(_serverOffset!) : deviceNow;
+    final nextType = _nextMarkTypeFor(logicalNow);
 
     final polygons =
         _polygon.isEmpty
@@ -599,38 +698,38 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       body: Column(
         children: [
           // ---- MAPA: altura fija (40–45% pantalla) ----
-          SizedBox(
-            height: size.height * 0.42,
-            width: double.infinity,
-            child: ClipRRect(
-              borderRadius: const BorderRadius.vertical(
-                bottom: Radius.circular(16),
-              ),
-              child: GoogleMap(
-                initialCameraPosition: CameraPosition(
-                  target:
-                      _polygon.isNotEmpty
-                          ? _polygonCenter()
-                          : (pos != null
-                              ? LatLng(pos.latitude, pos.longitude)
-                              : const LatLng(-16.3989, -71.5369)),
-                  zoom: _polygon.isNotEmpty ? 17 : 18,
-                ),
-                polygons: polygons,
-                markers: markers,
-                myLocationEnabled: true,
-                myLocationButtonEnabled: true,
-                compassEnabled: true,
-                mapToolbarEnabled: false,
-                onMapCreated: (c) async {
-                  _mapCtrl = c;
-                  // Una vez que el mapa está listo, ubicamos y empezamos a escuchar
-                  await _locateAndCheck();
-                  _listenPosition();
-                },
-              ),
-            ),
-          ),
+          // SizedBox(
+          //   height: size.height * 0.42,
+          //   width: double.infinity,
+          //   child: ClipRRect(
+          //     borderRadius: const BorderRadius.vertical(
+          //       bottom: Radius.circular(16),
+          //     ),
+          //     child: GoogleMap(
+          //       initialCameraPosition: CameraPosition(
+          //         target:
+          //             _polygon.isNotEmpty
+          //                 ? _polygonCenter()
+          //                 : (pos != null
+          //                     ? LatLng(pos.latitude, pos.longitude)
+          //                     : const LatLng(-16.3989, -71.5369)),
+          //         zoom: _polygon.isNotEmpty ? 17 : 18,
+          //       ),
+          //       polygons: polygons,
+          //       markers: markers,
+          //       myLocationEnabled: true,
+          //       myLocationButtonEnabled: true,
+          //       compassEnabled: true,
+          //       mapToolbarEnabled: false,
+          //       onMapCreated: (c) async {
+          //         _mapCtrl = c;
+          //         // Una vez que el mapa está listo, ubicamos y empezamos a escuchar
+          //         await _locateAndCheck();
+          //         _listenPosition();
+          //       },
+          //     ),
+          //   ),
+          // ),
 
           // ---- INFO + BOTÓN: scrollable ----
           Expanded(
@@ -734,55 +833,69 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
                               style: textTheme.titleMedium,
                             ),
                             const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 12,
-                              runSpacing: 8,
-                              children: [
-                                Chip(
-                                  avatar: Icon(
-                                    _inside == null
-                                        ? Icons.help_outline
-                                        : (_inside!
-                                            ? Icons.check_circle
-                                            : Icons.warning_amber_rounded),
-                                    size: 18,
-                                  ),
-                                  label: Text(
-                                    _inside == null
-                                        ? 'Sin estado'
-                                        : (_inside!
-                                            ? 'Dentro del perímetro'
-                                            : 'Fuera del perímetro'),
-                                  ),
-                                  backgroundColor:
-                                      _inside == null
-                                          ? Colors.grey.shade300
-                                          : (_inside!
-                                              ? Colors.green.shade200
-                                              : Colors.red.shade200),
-                                ),
-                                if (pos != null)
+                            Center(
+                              child: Wrap(
+                                alignment: WrapAlignment.center,
+                                spacing: 12,
+                                runSpacing: 8,
+
+                                children: [
                                   Chip(
-                                    avatar: const Icon(
-                                      Icons.gps_fixed,
+                                    avatar: Icon(
+                                      _inside == null
+                                          ? Icons.help_outline
+                                          : (_inside!
+                                              ? Icons.check_circle
+                                              : Icons.warning_amber_rounded),
                                       size: 18,
                                     ),
                                     label: Text(
-                                      'Precisión: ${pos.accuracy.toStringAsFixed(1)} m'
-                                      '${_accuracyMax != null ? ' / máx: ${_accuracyMax!.toStringAsFixed(0)} m' : ''}',
+                                      _inside == null
+                                          ? 'Sin estado'
+                                          : (_inside!
+                                              ? 'Dentro del perímetro'
+                                              : 'Fuera del perímetro'),
+                                      style: TextStyle(color: Colors.black),
                                     ),
+                                    backgroundColor:
+                                        _inside == null
+                                            ? Colors.grey.shade300
+                                            : (_inside!
+                                                ? Colors.green.shade200
+                                                : Colors.red.shade200),
                                   ),
-                              ],
+                                  if (pos != null)
+                                    Chip(
+                                      avatar: const Icon(
+                                        Icons.gps_fixed,
+                                        size: 18,
+                                      ),
+                                      label: Text(
+                                        'Precisión: ${pos.accuracy.toStringAsFixed(1)} m'
+                                        '${_accuracyMax != null ? ' / máx: ${_accuracyMax!.toStringAsFixed(0)} m' : ''}',
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
-                            if (_distanceToCenter != null)
+                            if (_distanceToCenter != null && _inside == false)
                               Padding(
                                 padding: const EdgeInsets.only(top: 8),
                                 child: Text(
-                                  'Distancia aprox. al colegio: '
+                                  'Distancia aprox. al perímetro: '
                                   '${_distanceToCenter!.toStringAsFixed(1)} m',
                                   style: textTheme.bodySmall,
                                 ),
                               ),
+                            if (_inside == true)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Text(
+                                  'Te encuentras dentro del perímetro.',
+                                  style: textTheme.bodySmall,
+                                ),
+                              ),
+
                             const SizedBox(height: 8),
                             Align(
                               alignment: Alignment.centerRight,
@@ -790,6 +903,9 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
                                 onPressed: _locateAndCheck,
                                 icon: const Icon(Icons.my_location),
                                 label: const Text('Actualizar ubicación'),
+                                style: TextButton.styleFrom(
+                                  backgroundColor: Colors.white,
+                                ),
                               ),
                             ),
                           ],
