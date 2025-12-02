@@ -16,7 +16,7 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.0.0+2
 
 environment:
   sdk: ^3.7.2
@@ -37,12 +37,16 @@ dependencies:
   firebase_core: ^4.2.1
   flutter:
     sdk: flutter
+  flutter_launcher_icons: ^0.14.4
+  flutter_native_splash: ^2.4.6
   geolocator: ^14.0.2
   google_maps_flutter: ^2.14.0
   google_sign_in: ^7.2.0
   http: ^1.5.0
   intl: ^0.20.2
   ntp: ^2.0.0
+  package_info_plus: ^8.0.0
+  rename_app: ^1.6.5
   shared_preferences: ^2.3.0
   uuid: ^4.5.0
 
@@ -62,6 +66,28 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - assets/images/
+    - assets/logo/
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+
+  # ícono base (fallback e iOS)
+  image_path: "assets/logo/logo2.png"
+
+  # ADAPTIVE ICON en Android
+  adaptive_icon_background: "#274185" # color de fondo
+  adaptive_icon_foreground: "assets/logo/logo2.png"
+
+flutter_native_splash:
+  color: "#274185" # color de fondo (ejemplo azul Salle)
+  image: assets/logo/logo2.png # tu logo splash
+  android: true
+  ios: true
+
+  android_12:
+    color: "#274185"
+    image: assets/logo/logo2.png
   #   - images/a_dot_ham.jpeg
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

@@ -1,7 +1,7 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:asistenciapersonal1/models/transaction_request.dart';
-import 'package:asistenciapersonal1/pages/login_page.dart';
 import 'package:asistenciapersonal1/services/transaction_api.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:ntp/ntp.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 class MarcacionAsistenciaPage extends StatefulWidget {
   const MarcacionAsistenciaPage({super.key});
@@ -35,6 +36,16 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   Timer? _clockTimer;
   DateTime _now = DateTime.now();
 
+  // ---- Control de bloqueo remoto ----
+  bool _appBloqueada = false;
+  String _mensajeBloqueo = '';
+  bool _mostrandoDialogoBloqueo = false;
+
+  // ---- Control de versión ----
+  int _buildActual = 0;
+  int? _minBuildRequerido;
+  String _versionActualTexto = '';
+
   // ----------- Geolocalización / geocerca -----------
   Position? _position;
   bool? _inside; // null = sin calcular aún
@@ -47,23 +58,150 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   // ----------- API Biotime -----------
   late final TransactionApi _api;
 
+  @override
+  void initState() {
+    super.initState();
+    _cargarInfoVersionYEscucharEstado();
+    _api = TransactionApi(baseUrl: 'https://apiasistencia.lasalle.edu.pe');
+
+    _startClock();
+    _initUserData();
+    _initLocationTracking();
+  }
+
+  @override
+  void dispose() {
+    _clockTimer?.cancel();
+    _posSub?.cancel();
+
+    _mapCtrl?.dispose();
+    _mapCtrl = null;
+
+    super.dispose();
+  }
+
+  // ================= BLOQUEO POR VERSIÓN / ESTADO REMOTO =================
+
+  Future<void> _cargarInfoVersionYEscucharEstado() async {
+    // 1. Obtener info del app
+    final info = await PackageInfo.fromPlatform();
+    _versionActualTexto = info.version; // ej: "1.0.1"
+    _buildActual = int.tryParse(info.buildNumber) ?? 0; // ej: 4
+
+    // 2. Escuchar el documento de configuración
+    _db.collection('settings').doc('app_status').snapshots().listen((doc) {
+      if (!doc.exists) return;
+      final data = doc.data();
+      if (data == null) return;
+
+      final bloqueadoManual = (data['bloqueado'] ?? false) as bool;
+      final mensaje = (data['mensaje'] ?? '') as String;
+
+      int? minBuild;
+      if (Platform.isAndroid) {
+        minBuild = (data['min_build_android'] as num?)?.toInt();
+      } else if (Platform.isIOS) {
+        minBuild = (data['min_build_ios'] as num?)?.toInt();
+      }
+
+      final requiereActualizacion =
+          (minBuild != null && _buildActual < minBuild);
+
+      if (!mounted) return;
+
+      setState(() {
+        _minBuildRequerido = minBuild;
+        _appBloqueada = bloqueadoManual || requiereActualizacion;
+        _mensajeBloqueo = _buildMensajeBloqueo(
+          mensaje,
+          bloqueadoManual: bloqueadoManual,
+          requiereActualizacion: requiereActualizacion,
+          minBuild: minBuild,
+        );
+      });
+
+      if (_appBloqueada) {
+        _mostrarDialogoBloqueo();
+      } else {
+        if (_mostrandoDialogoBloqueo) {
+          Navigator.of(context, rootNavigator: true).pop();
+          _mostrandoDialogoBloqueo = false;
+        }
+      }
+    });
+  }
+
+  String _buildMensajeBloqueo(
+    String mensajeFirestore, {
+    required bool bloqueadoManual,
+    required bool requiereActualizacion,
+    int? minBuild,
+  }) {
+    // Si está bloqueado por versión desactualizada
+    if (requiereActualizacion && minBuild != null) {
+      return 'Su versión de la aplicación está desactualizada.\n\n'
+          'Versión instalada: v$_versionActualTexto (build $_buildActual)\n'
+          'Versión mínima requerida: build $minBuild\n\n'
+          'Por favor acérquese a la oficina de Informática del colegio para actualizar la aplicación.';
+    }
+
+    // Si está bloqueado manualmente por Informática
+    if (bloqueadoManual) {
+      if (mensajeFirestore.isNotEmpty) return mensajeFirestore;
+      return 'La aplicación está temporalmente deshabilitada. '
+          'Por favor comuníquese con Informática del colegio.';
+    }
+
+    return '';
+  }
+
+  void _mostrarDialogoBloqueo() {
+    if (_mostrandoDialogoBloqueo || !mounted) return;
+    _mostrandoDialogoBloqueo = true;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text(
+            'Aplicación bloqueada',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: Text(_mensajeBloqueo),
+          actions: [
+            TextButton(
+              onPressed: () {
+                _mostrandoDialogoBloqueo = false;
+                Navigator.of(context, rootNavigator: true).pop();
+                // Opcional: SystemNavigator.pop();
+              },
+              child: const Text(
+                'Aceptar',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // ================= RELOJ =================
+
   Future<void> _syncTimeFromNTP() async {
     try {
-      // Hora “real” desde un servidor NTP (por defecto pool.ntp.org)
       final ntpNow = await NTP.now();
-
       final deviceNow = DateTime.now();
-      // ntpNow = deviceNow + offset  => offset = ntpNow - deviceNow
       final offset = ntpNow.difference(deviceNow);
 
       if (!mounted) return;
       setState(() {
         _serverOffset = offset;
-        _now = ntpNow; // inicializamos el reloj con la hora NTP
+        _now = ntpNow;
       });
     } catch (e) {
       debugPrint('Error NTP: $e');
-      // Si falla NTP, simplemente sigues con la hora del dispositivo como fallback
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -76,60 +214,14 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     }
   }
 
-  Future<void> _initLocationTracking() async {
-    // 1) Cargar geocerca
-    await _loadGeofence();
-
-    // 2) Obtener ubicación inicial
-    await _locateAndCheck();
-
-    // 3) Empezar a escuchar cambios de ubicación
-    _listenPosition();
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _api = TransactionApi(baseUrl: 'https://apiasistencia.lasalle.edu.pe');
-
-    _startClock();
-    _initUserData();
-
-    // Antes solo llamabas _loadGeofence();
-    // Ahora delegamos todo en este método:
-    _initLocationTracking();
-  }
-
-  @override
-  void dispose() {
-    _clockTimer?.cancel();
-    _posSub?.cancel();
-
-    _mapCtrl?.dispose();
-    _mapCtrl = null; // 👈 importante para evitar usar un controller muerto
-
-    super.dispose();
-  }
-
-  // ----------------- RELOJ -----------------
   void _startClock() {
-    // Primero intentamos sincronizar con NTP una vez
     _syncTimeFromNTP();
-
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
 
       final deviceNow = DateTime.now();
-      DateTime displayNow;
-
-      if (_serverOffset != null) {
-        // Hora mostrada = hora del dispositivo + desfase medido
-        displayNow = deviceNow.add(_serverOffset!);
-      } else {
-        // Si aún no tenemos offset (porque NTP falló o no respondió),
-        // usamos la hora local como fallback
-        displayNow = deviceNow;
-      }
+      final displayNow =
+          _serverOffset != null ? deviceNow.add(_serverOffset!) : deviceNow;
 
       setState(() {
         _now = displayNow;
@@ -137,7 +229,8 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     });
   }
 
-  // ----------------- DATOS DE USUARIO -----------------
+  // ================= DATOS DE USUARIO =================
+
   Future<void> _initUserData() async {
     final user = _auth.currentUser;
     if (user == null) return;
@@ -153,9 +246,8 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       _nombre = user.displayName ?? data?['name'];
       _dni = data?['dni'];
 
-      // 👇 Nuevo: recuperar última marcación persistida (si existe)
       final lastType = data?['lastMarkType'] as String?;
-      final lastTimeTS = data?['lastMarkTime']; // puede ser Timestamp o null
+      final lastTimeTS = data?['lastMarkTime'];
 
       if (lastType != null && lastTimeTS is Timestamp) {
         _lastMarkType = lastType;
@@ -166,7 +258,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
 
   String _nextMarkTypeFor(DateTime now) {
     if (_lastMarkTime == null) {
-      // nunca ha marcado (o no tenemos registro)
       return 'entrada';
     }
 
@@ -176,18 +267,21 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
         _lastMarkTime!.day == now.day;
 
     if (!sameDay) {
-      // nuevo día => empezamos siempre con entrada
       return 'entrada';
     }
 
-    // mismo día => alternar
     return _lastMarkType == 'entrada' ? 'salida' : 'entrada';
   }
 
-  // ----------------- GEOFERNCE DESDE FIRESTORE -----------------
+  // ================= GEOFERNCE / UBICACIÓN =================
+
+  Future<void> _initLocationTracking() async {
+    await _loadGeofence();
+    await _locateAndCheck();
+    _listenPosition();
+  }
 
   LatLng? _parseLatLngString(String s) {
-    // Ejemplo de s: "[16.40114° S, 71.52505° W]"
     final re = RegExp(
       r'([\d\.]+)\D*([NSEW])\s*,\s*([\d\.]+)\D*([NSEW])',
       caseSensitive: false,
@@ -258,6 +352,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       if (!mounted) return;
 
       setState(() {});
+
       if (_mapCtrl != null && _polygon.isNotEmpty) {
         double minLat = _polygon.first.latitude,
             maxLat = _polygon.first.latitude;
@@ -301,7 +396,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     if (_polygon.isEmpty) return 0;
 
     double minDist = double.infinity;
-
     for (final v in _polygon) {
       final d = Geolocator.distanceBetween(
         pos.latitude,
@@ -311,11 +405,9 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       );
       if (d < minDist) minDist = d;
     }
-
     return minDist;
   }
 
-  // ----------------- PERMISOS / POSICIÓN -----------------
   Future<bool> _ensurePermissions() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
@@ -372,18 +464,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     return inside;
   }
 
-  LatLng _polygonCenter() {
-    if (_polygon.isEmpty) {
-      return const LatLng(-16.3989, -71.5369); // fallback: Arequipa centro
-    }
-    double sumLat = 0, sumLng = 0;
-    for (final p in _polygon) {
-      sumLat += p.latitude;
-      sumLng += p.longitude;
-    }
-    return LatLng(sumLat / _polygon.length, sumLng / _polygon.length);
-  }
-
   Future<void> _locateAndCheck() async {
     final ok = await _ensurePermissions();
     if (!ok) return;
@@ -392,7 +472,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       desiredAccuracy: LocationAccuracy.bestForNavigation,
     );
 
-    // Reintento si la precisión no es buena
     if (_accuracyMax != null && pos.accuracy > _accuracyMax!) {
       try {
         pos = await Geolocator.getCurrentPosition(
@@ -416,15 +495,12 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
 
     if (_polygon.isNotEmpty) {
       if (_inside == true) {
-        // Si está dentro, consideramos distancia 0 (no tiene sentido decirle que está a X m)
         _distanceToCenter = 0;
       } else {
-        // Si está fuera, calculamos la distancia al perímetro (aprox. al vértice más cercano)
         _distanceToCenter = _distanceToPolygon(pos);
       }
     }
 
-    // Mover cámara si el mapa sigue vivo
     if (_mapCtrl != null) {
       try {
         if (!mounted || _mapCtrl == null) return;
@@ -500,21 +576,18 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     });
   }
 
-  // ----------------- API BIOTIME (USA TransactionApi) -----------------
+  // ================= API BIOTIME =================
 
   Future<void> _enviarMarcacionBiotime({
     required String empCode,
     required double lat,
     required double lng,
   }) async {
-    // Construimos el body para TransactionIn / TransactionRequest
-    // punch_time = null => lo pone el servidor (NOW())
     final tx = TransactionRequest(
       empCode: empCode,
       punchTime: null,
       longitude: lng,
       latitude: lat,
-      // Puedes guardar una referencia básica en gpsLocation
       gpsLocation: 'Lat: $lat, Lng: $lng',
       mobile: null,
     );
@@ -522,14 +595,15 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     await _api.sendTransaction(tx);
   }
 
-  // ----------------- LÓGICA DE MARCACIÓN -----------------
-  String _nextMarkType() {
-    // Por ahora es solo en memoria: si la última fue entrada, ahora salida.
-    if (_lastMarkType == 'entrada') return 'salida';
-    return 'entrada';
-  }
+  // ================= LÓGICA DE MARCACIÓN =================
 
   Future<void> _handleMark() async {
+    // 👉 Seguridad extra: si está bloqueada, no marcamos
+    if (_appBloqueada) {
+      _mostrarDialogoBloqueo();
+      return;
+    }
+
     final user = _auth.currentUser;
     if (user == null) {
       if (mounted) {
@@ -562,14 +636,12 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     });
 
     try {
-      // Hora consistente con NTP si tienes offset
       final nowDevice = DateTime.now();
       final now =
           _serverOffset != null ? nowDevice.add(_serverOffset!) : nowDevice;
 
       final nextType = _nextMarkTypeFor(now);
 
-      // 👮‍♂️ (opcional) Regla: máximo ENTRADA + SALIDA por día
       if (_lastMarkTime != null) {
         final sameDay =
             _lastMarkTime!.year == now.year &&
@@ -577,7 +649,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
             _lastMarkTime!.day == now.day;
 
         if (sameDay && _lastMarkType == 'salida') {
-          // ya tuvo salida hoy
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -591,7 +662,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
         }
       }
 
-      // Actualizar ubicación antes de marcar
       await _locateAndCheck();
 
       final pos = _position;
@@ -612,14 +682,12 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
         return;
       }
 
-      // 👉 Enviar a Biotime
       await _enviarMarcacionBiotime(
         empCode: _dni!,
         lat: pos.latitude,
         lng: pos.longitude,
       );
 
-      // 👉 Guardar nueva última marcación en memoria y en Firestore
       final uid = user.uid;
       await _db.collection('users').doc(uid).update({
         'lastMarkType': nextType,
@@ -653,7 +721,22 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     }
   }
 
-  // ----------------- UI -----------------
+  // ================= HELPERS DE UI =================
+
+  String _formatTwo(int n) => n.toString().padLeft(2, '0');
+
+  String _friendlyNextType(String type) {
+    if (type == 'entrada') return 'ENTRADA';
+    if (type == 'salida') return 'SALIDA';
+    return type.toUpperCase();
+  }
+
+  String _formatDate(DateTime d) {
+    return '${_formatTwo(d.day)}/${_formatTwo(d.month)}/${d.year}';
+  }
+
+  // ================= UI =================
+
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
@@ -663,291 +746,387 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
         _serverOffset != null ? deviceNow.add(_serverOffset!) : deviceNow;
     final nextType = _nextMarkTypeFor(logicalNow);
 
-    final polygons =
-        _polygon.isEmpty
-            ? <Polygon>{}
-            : {
-              Polygon(
-                polygonId: const PolygonId('geofence'),
-                points: _polygon,
-                fillColor: Colors.green.withOpacity(0.2),
-                strokeColor: Colors.green,
-                strokeWidth: 2,
-              ),
-            };
-
-    final markers = <Marker>{
-      if (pos != null)
-        Marker(
-          markerId: const MarkerId('me'),
-          position: LatLng(pos.latitude, pos.longitude),
-          infoWindow: InfoWindow(
-            title: 'Tu ubicación',
-            snippet: 'Precisión: ${pos.accuracy.toStringAsFixed(1)} m',
-          ),
-        ),
-    };
-
-    final size = MediaQuery.of(context).size;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Registro de asistencia'),
         centerTitle: true,
       ),
-      body: Column(
+      body: Stack(
         children: [
-          // ---- MAPA: altura fija (40–45% pantalla) ----
-          // SizedBox(
-          //   height: size.height * 0.42,
-          //   width: double.infinity,
-          //   child: ClipRRect(
-          //     borderRadius: const BorderRadius.vertical(
-          //       bottom: Radius.circular(16),
-          //     ),
-          //     child: GoogleMap(
-          //       initialCameraPosition: CameraPosition(
-          //         target:
-          //             _polygon.isNotEmpty
-          //                 ? _polygonCenter()
-          //                 : (pos != null
-          //                     ? LatLng(pos.latitude, pos.longitude)
-          //                     : const LatLng(-16.3989, -71.5369)),
-          //         zoom: _polygon.isNotEmpty ? 17 : 18,
-          //       ),
-          //       polygons: polygons,
-          //       markers: markers,
-          //       myLocationEnabled: true,
-          //       myLocationButtonEnabled: true,
-          //       compassEnabled: true,
-          //       mapToolbarEnabled: false,
-          //       onMapCreated: (c) async {
-          //         _mapCtrl = c;
-          //         // Una vez que el mapa está listo, ubicamos y empezamos a escuchar
-          //         await _locateAndCheck();
-          //         _listenPosition();
-          //       },
-          //     ),
-          //   ),
-          // ),
-
-          // ---- INFO + BOTÓN: scrollable ----
-          Expanded(
-            child: Container(
-              width: double.infinity,
-              color: Theme.of(
-                context,
-              ).colorScheme.surfaceVariant.withOpacity(0.2),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Card usuario + hora
-                    Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            CircleAvatar(
-                              radius: 24,
-                              child: Text(
-                                (_nombre ?? 'U').isNotEmpty
-                                    ? (_nombre ?? 'U')[0].toUpperCase()
-                                    : 'U',
+          // -------- CONTENIDO NORMAL --------
+          SafeArea(
+            child: Column(
+              children: [
+                Expanded(
+                  child: Container(
+                    width: double.infinity,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.surfaceVariant.withOpacity(0.2),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // ===== CARD USUARIO + HORA =====
+                          Card(
+                            elevation: 2,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  CircleAvatar(
+                                    radius: 26,
+                                    child: Text(
+                                      (_nombre ?? 'U').isNotEmpty
+                                          ? (_nombre ?? 'U')[0].toUpperCase()
+                                          : 'U',
+                                      style: textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        if (_nombre != null)
+                                          Text(
+                                            _nombre!,
+                                            style: textTheme.titleMedium
+                                                ?.copyWith(
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                          ),
+                                        if (_email != null)
+                                          Text(
+                                            _email!,
+                                            style: textTheme.bodySmall,
+                                          ),
+                                        if (_dni != null)
+                                          Text(
+                                            'DNI: $_dni',
+                                            style: textTheme.bodySmall,
+                                          ),
+                                        const SizedBox(height: 8),
+                                        Row(
+                                          children: [
+                                            const Icon(
+                                              Icons.access_time,
+                                              size: 18,
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              'Hora actual:',
+                                              style: textTheme.bodyMedium,
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text(
+                                              '${_formatTwo(_now.hour)}:'
+                                              '${_formatTwo(_now.minute)}:'
+                                              '${_formatTwo(_now.second)}',
+                                              style: textTheme.titleLarge
+                                                  ?.copyWith(
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                            ),
+                                            Text(
+                                              _formatDate(_now),
+                                              style: textTheme.bodySmall,
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 8),
+                                        if (_lastMarkTime != null)
+                                          Text(
+                                            'Última marcación: '
+                                            '${_lastMarkType} a las '
+                                            '${_formatTwo(_lastMarkTime!.hour)}:'
+                                            '${_formatTwo(_lastMarkTime!.minute)}',
+                                            style: textTheme.bodySmall,
+                                          )
+                                        else
+                                          Text(
+                                            'Sin marcaciones registradas hoy.',
+                                            style: textTheme.bodySmall,
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                            const SizedBox(width: 16),
-                            Expanded(
+                          ),
+
+                          const SizedBox(height: 12),
+
+                          // ===== CARD PRÓXIMA MARCACIÓN =====
+                          Card(
+                            elevation: 2,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: Colors.grey.shade400,
+                                      ),
+                                    ),
+                                    child: const Icon(
+                                      Icons.fingerprint,
+                                      size: 26,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Próxima marcación',
+                                          style: textTheme.labelMedium
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _friendlyNextType(nextType),
+                                          style: textTheme.titleLarge?.copyWith(
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'Se alterna automáticamente entre ENTRADA y SALIDA según tu última marca.',
+                                          style: textTheme.bodySmall?.copyWith(
+                                            color: Colors.grey.shade700,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+
+                          const SizedBox(height: 12),
+
+                          // ===== CARD ESTADO DE UBICACIÓN =====
+                          Card(
+                            elevation: 1,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  if (_nombre != null)
-                                    Text(
-                                      _nombre!,
-                                      style: textTheme.titleMedium,
-                                    ),
-                                  if (_email != null)
-                                    Text(_email!, style: textTheme.bodySmall),
-                                  if (_dni != null)
-                                    Text(
-                                      'DNI: $_dni',
-                                      style: textTheme.bodySmall,
-                                    ),
-                                  const SizedBox(height: 8),
                                   Row(
                                     children: [
-                                      const Icon(Icons.access_time, size: 18),
-                                      const SizedBox(width: 4),
+                                      const Icon(Icons.my_location, size: 20),
+                                      const SizedBox(width: 8),
                                       Text(
-                                        'Hora actual: '
-                                        '${_now.hour.toString().padLeft(2, '0')}:'
-                                        '${_now.minute.toString().padLeft(2, '0')}:'
-                                        '${_now.second.toString().padLeft(2, '0')}',
-                                        style: textTheme.bodyMedium,
+                                        'Estado de ubicación',
+                                        style: textTheme.titleMedium?.copyWith(
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 4),
-                                  if (_lastMarkTime != null)
-                                    Text(
-                                      'Última marcación (sesión): '
-                                      '$_lastMarkType a las '
-                                      '${_lastMarkTime!.hour.toString().padLeft(2, '0')}:'
-                                      '${_lastMarkTime!.minute.toString().padLeft(2, '0')}',
-                                      style: textTheme.bodySmall,
-                                    )
-                                  else
-                                    Text(
-                                      'Sin marcaciones en esta sesión.',
-                                      style: textTheme.bodySmall,
+                                  const SizedBox(height: 12),
+                                  Center(
+                                    child: Wrap(
+                                      alignment: WrapAlignment.center,
+                                      spacing: 12,
+                                      runSpacing: 8,
+                                      children: [
+                                        Chip(
+                                          avatar: Icon(
+                                            _inside == null
+                                                ? Icons.help_outline
+                                                : (_inside!
+                                                    ? Icons.check_circle
+                                                    : Icons
+                                                        .warning_amber_rounded),
+                                            size: 18,
+                                          ),
+                                          label: Text(
+                                            _inside == null
+                                                ? 'Sin estado'
+                                                : (_inside!
+                                                    ? 'Dentro del perímetro'
+                                                    : 'Fuera del perímetro'),
+                                            style: const TextStyle(
+                                              color: Colors.black,
+                                            ),
+                                          ),
+                                          backgroundColor:
+                                              _inside == null
+                                                  ? Colors.grey.shade300
+                                                  : (_inside!
+                                                      ? Colors.green.shade200
+                                                      : Colors.red.shade200),
+                                        ),
+                                        if (pos != null)
+                                          Chip(
+                                            avatar: const Icon(
+                                              Icons.gps_fixed,
+                                              size: 18,
+                                            ),
+                                            label: Text(
+                                              'Precisión: '
+                                              '${pos.accuracy.toStringAsFixed(1)} m'
+                                              '${_accuracyMax != null ? ' / máx: ${_accuracyMax!.toStringAsFixed(0)} m' : ''}',
+                                            ),
+                                          ),
+                                      ],
                                     ),
+                                  ),
+                                  if (_distanceToCenter != null &&
+                                      _inside == false)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: Text(
+                                        'Distancia aprox. al perímetro: '
+                                        '${_distanceToCenter!.toStringAsFixed(1)} m',
+                                        style: textTheme.bodySmall,
+                                      ),
+                                    ),
+                                  if (_inside == true)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: Text(
+                                        'Te encuentras dentro del perímetro.',
+                                        style: textTheme.bodySmall,
+                                      ),
+                                    ),
+                                  const SizedBox(height: 8),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: TextButton.icon(
+                                      onPressed: _locateAndCheck,
+                                      icon: const Icon(Icons.my_location),
+                                      label: const Text('Actualizar ubicación'),
+                                      style: TextButton.styleFrom(
+                                        backgroundColor: Colors.white,
+                                      ),
+                                    ),
+                                  ),
                                 ],
                               ),
                             ),
-                          ],
-                        ),
+                          ),
+
+                          const SizedBox(height: 24),
+
+                          // ===== BOTÓN PRINCIPAL =====
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: _loading ? null : _handleMark,
+                              icon:
+                                  _loading
+                                      ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                      : const Icon(Icons.fingerprint),
+                              label: Text(
+                                _loading
+                                    ? 'Enviando...'
+                                    : 'Marcar ${_friendlyNextType(nextType)}',
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Asegúrate de tener el GPS activado y estar dentro del perímetro antes de marcar.',
+                            textAlign: TextAlign.center,
+                            style: textTheme.bodySmall?.copyWith(
+                              color: Colors.grey.shade700,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+                  ),
+                ),
+              ],
+            ),
+          ),
 
-                    const SizedBox(height: 12),
-
-                    // Card estado de geocerca
-                    Card(
-                      elevation: 1,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Estado de ubicación',
-                              style: textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            Center(
-                              child: Wrap(
-                                alignment: WrapAlignment.center,
-                                spacing: 12,
-                                runSpacing: 8,
-
-                                children: [
-                                  Chip(
-                                    avatar: Icon(
-                                      _inside == null
-                                          ? Icons.help_outline
-                                          : (_inside!
-                                              ? Icons.check_circle
-                                              : Icons.warning_amber_rounded),
-                                      size: 18,
-                                    ),
-                                    label: Text(
-                                      _inside == null
-                                          ? 'Sin estado'
-                                          : (_inside!
-                                              ? 'Dentro del perímetro'
-                                              : 'Fuera del perímetro'),
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    backgroundColor:
-                                        _inside == null
-                                            ? Colors.grey.shade300
-                                            : (_inside!
-                                                ? Colors.green.shade200
-                                                : Colors.red.shade200),
-                                  ),
-                                  if (pos != null)
-                                    Chip(
-                                      avatar: const Icon(
-                                        Icons.gps_fixed,
-                                        size: 18,
-                                      ),
-                                      label: Text(
-                                        'Precisión: ${pos.accuracy.toStringAsFixed(1)} m'
-                                        '${_accuracyMax != null ? ' / máx: ${_accuracyMax!.toStringAsFixed(0)} m' : ''}',
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                            if (_distanceToCenter != null && _inside == false)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 8),
-                                child: Text(
-                                  'Distancia aprox. al perímetro: '
-                                  '${_distanceToCenter!.toStringAsFixed(1)} m',
-                                  style: textTheme.bodySmall,
-                                ),
-                              ),
-                            if (_inside == true)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 8),
-                                child: Text(
-                                  'Te encuentras dentro del perímetro.',
-                                  style: textTheme.bodySmall,
-                                ),
-                              ),
-
-                            const SizedBox(height: 8),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: TextButton.icon(
-                                onPressed: _locateAndCheck,
-                                icon: const Icon(Icons.my_location),
-                                label: const Text('Actualizar ubicación'),
-                                style: TextButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Botón principal
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: _loading ? null : _handleMark,
-                        icon:
-                            _loading
-                                ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                                : const Icon(Icons.fingerprint),
-                        label: Text(
-                          _loading
-                              ? 'Enviando...'
-                              : 'Marcar $nextType'.toUpperCase(),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+          // -------- CAPA DE BLOQUEO --------
+          if (_appBloqueada)
+            AbsorbPointer(
+              absorbing: true,
+              child: Container(
+                alignment: Alignment.center,
+                color: Colors.black54,
+                padding: const EdgeInsets.all(24),
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.warning, size: 48),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Aplicación bloqueada',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
-                      ),
+                        const SizedBox(height: 8),
+                        Text(_mensajeBloqueo, textAlign: TextAlign.center),
+                        const SizedBox(height: 16),
+                        TextButton(
+                          onPressed: _mostrarDialogoBloqueo,
+                          child: const Text(
+                            'Más información',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
