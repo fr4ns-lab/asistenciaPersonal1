@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show InternetAddress, Platform;
 
 import 'package:asistenciapersonal1/models/transaction_request.dart';
 import 'package:asistenciapersonal1/services/auth_service.dart';
@@ -22,6 +22,10 @@ class MarcacionAsistenciaPage extends StatefulWidget {
 }
 
 class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
+  bool _gpsActivo = true;
+  bool _internetActivo = true;
+  bool _validandoServicios = true;
+  Timer? _servicesTimer;
   final _auth = FirebaseAuth.instance;
   final _db = FirebaseFirestore.instance;
   bool _testOutside = false;
@@ -63,6 +67,11 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     _cargarInfoVersionYEscucharEstado();
     _api = TransactionApi(baseUrl: 'https://apiasistencia.lasalle.edu.pe');
 
+    _validarServiciosRequeridos();
+    _servicesTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      _validarServiciosRequeridos();
+    });
+
     _startClock();
     _initUserData();
     _initLocationTracking();
@@ -71,14 +80,52 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   @override
   void dispose() {
     _clockTimer?.cancel();
+    _servicesTimer?.cancel();
     _posSub?.cancel();
     _mapCtrl?.dispose();
     _mapCtrl = null;
     super.dispose();
   }
 
+  bool _serviciosOk() => _gpsActivo && _internetActivo;
+
+  String _mensajeServicios() {
+    if (!_gpsActivo && !_internetActivo) {
+      return 'Debes activar el GPS y conectarte a Internet para usar la aplicación.';
+    }
+    if (!_gpsActivo) {
+      return 'Debes activar el GPS para usar la aplicación.';
+    }
+    if (!_internetActivo) {
+      return 'Debes conectarte a Internet para usar la aplicación.';
+    }
+    return '';
+  }
+
   String _userDocIdFromEmail(String email) {
     return email.toLowerCase().trim().split('@').first;
+  }
+
+  Future<bool> _hasInternetConnection() async {
+    try {
+      final result = await InternetAddress.lookup('google.com');
+      return result.isNotEmpty && result.first.rawAddress.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _validarServiciosRequeridos() async {
+    final gpsActivo = await Geolocator.isLocationServiceEnabled();
+    final internetActivo = await _hasInternetConnection();
+
+    if (!mounted) return;
+
+    setState(() {
+      _gpsActivo = gpsActivo;
+      _internetActivo = internetActivo;
+      _validandoServicios = false;
+    });
   }
 
   void _toggleTestLocation() {
@@ -682,6 +729,14 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   }
 
   Future<void> _handleMark() async {
+    if (!_serviciosOk()) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_mensajeServicios())));
+      }
+      return;
+    }
     if (_appBloqueada) {
       _mostrarDialogoBloqueo();
       return;
@@ -1012,6 +1067,40 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
                                   letterSpacing: 0.8,
                                 ),
                               ),
+                              if (!_validandoServicios && !_serviciosOk()) ...[
+                                const SizedBox(height: 14),
+                                Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFEF2F2),
+                                    borderRadius: BorderRadius.circular(18),
+                                    border: Border.all(
+                                      color: const Color(0xFFFECACA),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Icon(
+                                        Icons.wifi_off_rounded,
+                                        color: Color(0xFFDC2626),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          _mensajeServicios(),
+                                          style: theme.textTheme.bodyMedium
+                                              ?.copyWith(
+                                                color: const Color(0xFF991B1B),
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 6),
                               Text(
                                 _timeSynced ? _formatTime(_now) : '--:--:--',
@@ -1073,7 +1162,9 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
                               (_loading ||
                                       !_timeSynced ||
                                       _inside != true ||
-                                      _appBloqueada)
+                                      _appBloqueada ||
+                                      !_serviciosOk() ||
+                                      _validandoServicios)
                                   ? null
                                   : _handleMark,
                           style: ElevatedButton.styleFrom(
@@ -1200,7 +1291,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
               ],
             ),
           ),
-          if (_appBloqueada)
+          if (_appBloqueada || (!_validandoServicios && !_serviciosOk()))
             Positioned.fill(
               child: AbsorbPointer(
                 child: Container(color: Colors.black.withOpacity(0.12)),
