@@ -2,11 +2,12 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:asistenciapersonal1/models/transaction_request.dart';
+import 'package:asistenciapersonal1/services/auth_service.dart';
 import 'package:asistenciapersonal1/services/transaction_api.dart';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:ntp/ntp.dart';
@@ -21,41 +22,39 @@ class MarcacionAsistenciaPage extends StatefulWidget {
 }
 
 class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
-  // ----------- Firebase / usuario -----------
   final _auth = FirebaseAuth.instance;
   final _db = FirebaseFirestore.instance;
-  Duration? _serverOffset; // diferencia entre hora NTP y hora del dispositivo
+  bool _testOutside = false;
+  Duration? _serverOffset;
+  bool _timeSynced = false;
 
   bool _loading = false;
   String? _dni;
   String? _nombre;
   String? _email;
-  String _lastMarkType = 'ninguna'; // entrada / salida / ninguna
+  String? _profileImage;
+
   DateTime? _lastMarkTime;
 
   Timer? _clockTimer;
   DateTime _now = DateTime.now();
 
-  // ---- Control de bloqueo remoto ----
   bool _appBloqueada = false;
   String _mensajeBloqueo = '';
   bool _mostrandoDialogoBloqueo = false;
 
-  // ---- Control de versión ----
   int _buildActual = 0;
   int? _minBuildRequerido;
   String _versionActualTexto = '';
 
-  // ----------- Geolocalización / geocerca -----------
   Position? _position;
-  bool? _inside; // null = sin calcular aún
-  double? _accuracyMax; // metros máximos aceptables
+  bool? _inside;
+  double? _accuracyMax;
   List<LatLng> _polygon = [];
-  double? _distanceToCenter; // para mostrar "distancia al colegio" aprox.
+  double? _distanceToCenter;
   GoogleMapController? _mapCtrl;
   StreamSubscription<Position>? _posSub;
 
-  // ----------- API Biotime -----------
   late final TransactionApi _api;
 
   @override
@@ -73,22 +72,196 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   void dispose() {
     _clockTimer?.cancel();
     _posSub?.cancel();
-
     _mapCtrl?.dispose();
     _mapCtrl = null;
-
     super.dispose();
   }
 
-  // ================= BLOQUEO POR VERSIÓN / ESTADO REMOTO =================
+  String _userDocIdFromEmail(String email) {
+    return email.toLowerCase().trim().split('@').first;
+  }
+
+  void _toggleTestLocation() {
+    setState(() {
+      _testOutside = !_testOutside;
+
+      if (_testOutside) {
+        // Simula que estás FUERA
+        _inside = false;
+        _distanceToCenter = 120; // opcional, solo visual
+      } else {
+        // Simula que estás DENTRO
+        _inside = true;
+        _distanceToCenter = 0;
+      }
+    });
+  }
+
+  Future<void> _showSuccessPopup() async {
+    if (!mounted) return;
+
+    await showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'success',
+      barrierColor: Colors.black.withOpacity(0.45),
+      transitionDuration: const Duration(milliseconds: 320),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return SafeArea(
+          child: Center(
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.86,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 28,
+                ),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF0F766E), Color(0xFF22C55E)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(30),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x33000000),
+                      blurRadius: 24,
+                      offset: Offset(0, 12),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 96,
+                      height: 96,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.18),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.35),
+                          width: 2,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.check_circle_rounded,
+                        size: 62,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    const Text(
+                      '¡Marcación registrada!',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Tu marcación se registró correctamente.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Hora: ${_formatTime(_now)}',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: Colors.white.withOpacity(0.95),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.16),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: const Text(
+                        'Operación completada con éxito',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context, rootNavigator: true).pop();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: const Color(0xFF15803D),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        icon: const Icon(Icons.check_rounded),
+                        label: const Text(
+                          'Cerrar',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutBack,
+        );
+
+        return Transform.scale(
+          scale: curved.value,
+          child: Opacity(opacity: animation.value, child: child),
+        );
+      },
+    );
+  }
+
+  Future<void> _notifyPerimeterChange(bool inside) async {
+    try {
+      if (inside) {
+        await HapticFeedback.lightImpact();
+      } else {
+        await HapticFeedback.mediumImpact();
+      }
+    } catch (_) {}
+  }
 
   Future<void> _cargarInfoVersionYEscucharEstado() async {
-    // 1. Obtener info del app
     final info = await PackageInfo.fromPlatform();
-    _versionActualTexto = info.version; // ej: "1.0.1"
-    _buildActual = int.tryParse(info.buildNumber) ?? 0; // ej: 4
+    _versionActualTexto = info.version;
+    _buildActual = int.tryParse(info.buildNumber) ?? 0;
 
-    // 2. Escuchar el documento de configuración
     _db.collection('settings').doc('app_status').snapshots().listen((doc) {
       if (!doc.exists) return;
       final data = doc.data();
@@ -137,7 +310,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     required bool requiereActualizacion,
     int? minBuild,
   }) {
-    // Si está bloqueado por versión desactualizada
     if (requiereActualizacion && minBuild != null) {
       return 'Su versión de la aplicación está desactualizada.\n\n'
           'Versión instalada: v$_versionActualTexto (build $_buildActual)\n'
@@ -145,7 +317,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
           'Por favor acérquese a la oficina de Informática del colegio para actualizar la aplicación.';
     }
 
-    // Si está bloqueado manualmente por Informática
     if (bloqueadoManual) {
       if (mensajeFirestore.isNotEmpty) return mensajeFirestore;
       return 'La aplicación está temporalmente deshabilitada. '
@@ -164,30 +335,21 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       barrierDismissible: false,
       builder: (context) {
         return AlertDialog(
-          title: const Text(
-            'Aplicación bloqueada',
-            style: TextStyle(color: Colors.white),
-          ),
+          title: const Text('Aplicación bloqueada'),
           content: Text(_mensajeBloqueo),
           actions: [
             TextButton(
               onPressed: () {
                 _mostrandoDialogoBloqueo = false;
                 Navigator.of(context, rootNavigator: true).pop();
-                // Opcional: SystemNavigator.pop();
               },
-              child: const Text(
-                'Aceptar',
-                style: TextStyle(color: Colors.white),
-              ),
+              child: const Text('Aceptar'),
             ),
           ],
         );
       },
     );
   }
-
-  // ================= RELOJ =================
 
   Future<void> _syncTimeFromNTP() async {
     try {
@@ -199,29 +361,34 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       setState(() {
         _serverOffset = offset;
         _now = ntpNow;
+        _timeSynced = true;
       });
     } catch (e) {
       debugPrint('Error NTP: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'No se pudo sincronizar hora con internet. Usando hora del dispositivo.',
-            ),
+
+      if (!mounted) return;
+      setState(() {
+        _timeSynced = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo sincronizar la hora del servidor. Verifica tu conexión.',
           ),
-        );
-      }
+        ),
+      );
     }
   }
 
   void _startClock() {
     _syncTimeFromNTP();
+
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
+      if (!mounted || !_timeSynced || _serverOffset == null) return;
 
       final deviceNow = DateTime.now();
-      final displayNow =
-          _serverOffset != null ? deviceNow.add(_serverOffset!) : deviceNow;
+      final displayNow = deviceNow.add(_serverOffset!);
 
       setState(() {
         _now = displayNow;
@@ -229,51 +396,38 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     });
   }
 
-  // ================= DATOS DE USUARIO =================
-
   Future<void> _initUserData() async {
     final user = _auth.currentUser;
     if (user == null) return;
 
-    final uid = user.uid;
-    final doc = await _db.collection('users').doc(uid).get();
+    final email = user.email?.trim().toLowerCase();
+    if (email == null || email.isEmpty) return;
+
+    final docId = _userDocIdFromEmail(email);
+    final doc = await _db.collection('users').doc(docId).get();
     final data = doc.data();
 
     if (!mounted) return;
 
     setState(() {
-      _email = user.email;
-      _nombre = user.displayName ?? data?['name'];
+      _email = email;
+      _nombre = data?['name'] ?? user.displayName;
       _dni = data?['dni'];
+
+      final photoFromDb = data?['photoUrl'] as String?;
+      _profileImage =
+          (photoFromDb != null && photoFromDb.trim().isNotEmpty)
+              ? photoFromDb.trim()
+              : user.photoURL;
 
       final lastType = data?['lastMarkType'] as String?;
       final lastTimeTS = data?['lastMarkTime'];
 
       if (lastType != null && lastTimeTS is Timestamp) {
-        _lastMarkType = lastType;
         _lastMarkTime = lastTimeTS.toDate();
       }
     });
   }
-
-  String _nextMarkTypeFor(DateTime now) {
-    if (_lastMarkTime == null) {
-      return 'entrada';
-    }
-
-    final sameDay =
-        _lastMarkTime!.year == now.year &&
-        _lastMarkTime!.month == now.month &&
-        _lastMarkTime!.day == now.day;
-
-    if (!sameDay) {
-      return 'entrada';
-    }
-
-    return _lastMarkType == 'entrada' ? 'salida' : 'entrada';
-  }
-
-  // ================= GEOFERNCE / UBICACIÓN =================
 
   Future<void> _initLocationTracking() async {
     await _loadGeofence();
@@ -350,43 +504,12 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       _polygon = pts;
 
       if (!mounted) return;
-
       setState(() {});
-
-      if (_mapCtrl != null && _polygon.isNotEmpty) {
-        double minLat = _polygon.first.latitude,
-            maxLat = _polygon.first.latitude;
-        double minLng = _polygon.first.longitude,
-            maxLng = _polygon.first.longitude;
-
-        for (final q in _polygon) {
-          if (q.latitude < minLat) minLat = q.latitude;
-          if (q.latitude > maxLat) maxLat = q.latitude;
-          if (q.longitude < minLng) minLng = q.longitude;
-          if (q.longitude > maxLng) maxLng = q.longitude;
-        }
-
-        final bounds = LatLngBounds(
-          southwest: LatLng(minLat, minLng),
-          northeast: LatLng(maxLat, maxLng),
-        );
-
-        try {
-          if (!mounted || _mapCtrl == null) return;
-          await _mapCtrl!.animateCamera(
-            CameraUpdate.newLatLngBounds(bounds, 80),
-          );
-        } catch (e) {
-          debugPrint(
-            'No se pudo animar cámara (mapa dispose?) en _loadGeofence: $e',
-          );
-        }
-      }
     } catch (e) {
       debugPrint('Error al cargar geofence: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error Firestore (geofence): $e')),
+          SnackBar(content: Text('Error Firestore (geocerca): $e')),
         );
       }
     }
@@ -431,6 +554,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
         return false;
       }
     }
+
     if (permission == LocationPermission.deniedForever) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -443,12 +567,14 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       }
       return false;
     }
+
     return true;
   }
 
   bool _pointInPolygon(LatLng p, List<LatLng> poly) {
     if (poly.length < 3) return false;
     bool inside = false;
+
     for (int i = 0, j = poly.length - 1; i < poly.length; j = i++) {
       final xi = poly[i].longitude, yi = poly[i].latitude;
       final xj = poly[j].longitude, yj = poly[j].latitude;
@@ -459,8 +585,10 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
           (px <
               (xj - xi) * (py - yi) / ((yj - yi) == 0 ? 1e-12 : (yj - yi)) +
                   xi);
+
       if (intersects) inside = !inside;
     }
+
     return inside;
   }
 
@@ -488,41 +616,20 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
         _polygon,
       );
     }
-
     final prevInside = _inside;
     _position = pos;
     _inside = nowInside;
 
     if (_polygon.isNotEmpty) {
-      if (_inside == true) {
-        _distanceToCenter = 0;
-      } else {
-        _distanceToCenter = _distanceToPolygon(pos);
-      }
-    }
-
-    if (_mapCtrl != null) {
-      try {
-        if (!mounted || _mapCtrl == null) return;
-        await _mapCtrl!.animateCamera(
-          CameraUpdate.newLatLng(LatLng(pos.latitude, pos.longitude)),
-        );
-      } catch (e) {
-        debugPrint('No se pudo animar cámara en _locateAndCheck: $e');
-      }
+      _distanceToCenter = _inside == true ? 0 : _distanceToPolygon(pos);
     }
 
     if (!mounted) return;
 
     setState(() {});
+
     if (prevInside != null && prevInside != nowInside) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            nowInside ? 'Entraste al perímetro.' : 'Saliste del perímetro.',
-          ),
-        ),
-      );
+      _notifyPerimeterChange(nowInside);
     }
   }
 
@@ -544,39 +651,18 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       _inside = nowInside;
 
       if (_polygon.isNotEmpty) {
-        if (_inside == true) {
-          _distanceToCenter = 0;
-        } else {
-          _distanceToCenter = _distanceToPolygon(pos);
-        }
+        _distanceToCenter = _inside == true ? 0 : _distanceToPolygon(pos);
       }
 
       if (!mounted) return;
 
       setState(() {});
-      if (changed) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              nowInside ? 'Entraste al perímetro.' : 'Saliste del perímetro.',
-            ),
-          ),
-        );
-      }
 
-      if (_mapCtrl != null) {
-        try {
-          _mapCtrl!.animateCamera(
-            CameraUpdate.newLatLng(LatLng(pos.latitude, pos.longitude)),
-          );
-        } catch (e) {
-          debugPrint('No se pudo animar cámara en _listenPosition: $e');
-        }
+      if (changed) {
+        _notifyPerimeterChange(nowInside);
       }
     });
   }
-
-  // ================= API BIOTIME =================
 
   Future<void> _enviarMarcacionBiotime({
     required String empCode,
@@ -595,12 +681,22 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     await _api.sendTransaction(tx);
   }
 
-  // ================= LÓGICA DE MARCACIÓN =================
-
   Future<void> _handleMark() async {
-    // 👉 Seguridad extra: si está bloqueada, no marcamos
     if (_appBloqueada) {
       _mostrarDialogoBloqueo();
+      return;
+    }
+
+    if (!_timeSynced || _serverOffset == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No se puede marcar sin sincronizar la hora del servidor.',
+            ),
+          ),
+        );
+      }
       return;
     }
 
@@ -612,6 +708,18 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
             content: Text(
               'No hay sesión activa. Vuelve a iniciar sesión con tu cuenta institucional.',
             ),
+          ),
+        );
+      }
+      return;
+    }
+
+    final email = user.email?.trim().toLowerCase();
+    if (email == null || email.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No se pudo identificar el correo del usuario.'),
           ),
         );
       }
@@ -637,30 +745,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
 
     try {
       final nowDevice = DateTime.now();
-      final now =
-          _serverOffset != null ? nowDevice.add(_serverOffset!) : nowDevice;
-
-      final nextType = _nextMarkTypeFor(now);
-
-      if (_lastMarkTime != null) {
-        final sameDay =
-            _lastMarkTime!.year == now.year &&
-            _lastMarkTime!.month == now.month &&
-            _lastMarkTime!.day == now.day;
-
-        if (sameDay && _lastMarkType == 'salida') {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Ya registraste ENTRADA y SALIDA hoy. No se permiten más marcaciones.',
-                ),
-              ),
-            );
-          }
-          return;
-        }
-      }
+      final now = nowDevice.add(_serverOffset!);
 
       await _locateAndCheck();
 
@@ -688,25 +773,19 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
         lng: pos.longitude,
       );
 
-      final uid = user.uid;
-      await _db.collection('users').doc(uid).update({
-        'lastMarkType': nextType,
+      final docId = _userDocIdFromEmail(email);
+
+      await _db.collection('users').doc(docId).update({
         'lastMarkTime': Timestamp.fromDate(now),
       });
 
       if (!mounted) return;
 
       setState(() {
-        _lastMarkType = nextType;
         _lastMarkTime = now;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Marcación de $nextType registrada correctamente.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      await _showSuccessPopup();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -721,410 +800,410 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     }
   }
 
-  // ================= HELPERS DE UI =================
-
   String _formatTwo(int n) => n.toString().padLeft(2, '0');
 
-  String _friendlyNextType(String type) {
-    if (type == 'entrada') return 'ENTRADA';
-    if (type == 'salida') return 'SALIDA';
-    return type.toUpperCase();
+  String _formatTime(DateTime d) {
+    final hour12 = d.hour % 12 == 0 ? 12 : d.hour % 12;
+    final period = d.hour >= 12 ? 'p. m.' : 'a. m.';
+    return '${_formatTwo(hour12)}:${_formatTwo(d.minute)}:${_formatTwo(d.second)} $period';
   }
 
-  String _formatDate(DateTime d) {
-    return '${_formatTwo(d.day)}/${_formatTwo(d.month)}/${d.year}';
+  String _formatDateFull(DateTime d) {
+    const dias = [
+      'lunes',
+      'martes',
+      'miércoles',
+      'jueves',
+      'viernes',
+      'sábado',
+      'domingo',
+    ];
+    const meses = [
+      'enero',
+      'febrero',
+      'marzo',
+      'abril',
+      'mayo',
+      'junio',
+      'julio',
+      'agosto',
+      'septiembre',
+      'octubre',
+      'noviembre',
+      'diciembre',
+    ];
+
+    final weekday = dias[d.weekday - 1];
+    final month = meses[d.month - 1];
+    return '${_capitalize(weekday)}, ${d.day} de $month';
   }
 
-  // ================= UI =================
+  String _formatSimpleDate(DateTime d) {
+    const meses = [
+      'enero',
+      'febrero',
+      'marzo',
+      'abril',
+      'mayo',
+      'junio',
+      'julio',
+      'agosto',
+      'septiembre',
+      'octubre',
+      'noviembre',
+      'diciembre',
+    ];
+    return '${d.day} de ${meses[d.month - 1]}';
+  }
+
+  String _capitalize(String value) {
+    if (value.isEmpty) return value;
+    return value[0].toUpperCase() + value.substring(1);
+  }
+
+  String _initialsFromName(String? name) {
+    if (name == null || name.trim().isEmpty) return 'U';
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length == 1) return parts.first[0].toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  String _locationStatusTitle() {
+    if (_inside == null) return 'Verificando ubicación';
+    return _inside! ? 'Dentro del perímetro' : 'Fuera del perímetro';
+  }
+
+  String _locationStatusSubtitle() {
+    final pos = _position;
+    if (pos == null) return 'Esperando señal GPS';
+    final precision = 'GPS ±${pos.accuracy.toStringAsFixed(0)} m';
+
+    if (_inside == true) {
+      return 'Ubicación validada automáticamente · $precision';
+    }
+    if (_distanceToCenter != null) {
+      return 'Aprox. ${_distanceToCenter!.toStringAsFixed(1)} m del perímetro · $precision';
+    }
+    return precision;
+  }
+
+  double _locationProgressValue() {
+    final pos = _position;
+    if (pos == null) return 0.2;
+    if (_accuracyMax == null || _accuracyMax == 0) {
+      return _inside == true ? 1 : 0.35;
+    }
+
+    final ratio = 1 - (pos.accuracy / _accuracyMax!).clamp(0.0, 1.0);
+    return ratio.toDouble().clamp(0.08, 1.0);
+  }
+
+  Color _statusColor(BuildContext context) {
+    if (_inside == null) return Colors.orange;
+    return _inside! ? Colors.green : Theme.of(context).colorScheme.error;
+  }
+
+  IconData _statusIcon() {
+    if (_inside == null) return Icons.gps_not_fixed_rounded;
+    return _inside! ? Icons.verified_user_rounded : Icons.location_off_rounded;
+  }
+
+  String _buttonLabel() {
+    if (_loading) return 'Registrando...';
+    return 'Registrar marcación';
+  }
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
+    final theme = Theme.of(context);
     final pos = _position;
-    final deviceNow = DateTime.now();
     final logicalNow =
-        _serverOffset != null ? deviceNow.add(_serverOffset!) : deviceNow;
-    final nextType = _nextMarkTypeFor(logicalNow);
+        (_timeSynced && _serverOffset != null)
+            ? DateTime.now().add(_serverOffset!)
+            : _now;
+    final statusColor = _statusColor(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Registro de asistencia'),
-        centerTitle: true,
+      floatingActionButton: FloatingActionButton(
+        onPressed: _toggleTestLocation,
+        backgroundColor: _testOutside ? Colors.red : Colors.green,
+        child: Icon(_testOutside ? Icons.location_off : Icons.location_on),
       ),
+      backgroundColor: const Color(0xFFF4F8FF),
       body: Stack(
         children: [
-          // -------- CONTENIDO NORMAL --------
           SafeArea(
             child: Column(
               children: [
+                Container(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Registro de marcación',
+                          style: theme.textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF0F172A),
+                          ),
+                        ),
+                      ),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0xFFE2E8F0)),
+                        ),
+                        child: IconButton(
+                          onPressed:
+                              _appBloqueada ? _mostrarDialogoBloqueo : null,
+                          icon: Icon(
+                            Icons.settings_outlined,
+                            color:
+                                _appBloqueada
+                                    ? const Color(0xFF2563EB)
+                                    : const Color(0xFF64748B),
+                          ),
+                        ),
+                      ),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0xFFE2E8F0)),
+                        ),
+                        child: IconButton(
+                          onPressed: () async {
+                            await AuthService.instance.signOut(context);
+                          },
+                          icon: Icon(
+                            Icons.output_sharp,
+                            color: const Color(0xFF2563EB),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 Expanded(
-                  child: Container(
-                    width: double.infinity,
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.surfaceVariant.withOpacity(0.2),
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // ===== CARD USUARIO + HORA =====
-                          Card(
-                            elevation: 2,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  CircleAvatar(
-                                    radius: 26,
-                                    child: Text(
-                                      (_nombre ?? 'U').isNotEmpty
-                                          ? (_nombre ?? 'U')[0].toUpperCase()
-                                          : 'U',
-                                      style: textTheme.titleMedium?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        if (_nombre != null)
-                                          Text(
-                                            _nombre!,
-                                            style: textTheme.titleMedium
-                                                ?.copyWith(
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                          ),
-                                        if (_email != null)
-                                          Text(
-                                            _email!,
-                                            style: textTheme.bodySmall,
-                                          ),
-                                        if (_dni != null)
-                                          Text(
-                                            'DNI: $_dni',
-                                            style: textTheme.bodySmall,
-                                          ),
-                                        const SizedBox(height: 8),
-                                        Row(
-                                          children: [
-                                            const Icon(
-                                              Icons.access_time,
-                                              size: 18,
-                                            ),
-                                            const SizedBox(width: 4),
-                                            Text(
-                                              'Hora actual:',
-                                              style: textTheme.bodyMedium,
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Text(
-                                              '${_formatTwo(_now.hour)}:'
-                                              '${_formatTwo(_now.minute)}:'
-                                              '${_formatTwo(_now.second)}',
-                                              style: textTheme.titleLarge
-                                                  ?.copyWith(
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                            ),
-                                            Text(
-                                              _formatDate(_now),
-                                              style: textTheme.bodySmall,
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 8),
-                                        if (_lastMarkTime != null)
-                                          Text(
-                                            'Última marcación: '
-                                            '${_lastMarkType} a las '
-                                            '${_formatTwo(_lastMarkTime!.hour)}:'
-                                            '${_formatTwo(_lastMarkTime!.minute)}',
-                                            style: textTheme.bodySmall,
-                                          )
-                                        else
-                                          Text(
-                                            'Sin marcaciones registradas hoy.',
-                                            style: textTheme.bodySmall,
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _ProfileCard(
+                          nombre: _nombre ?? 'Usuario',
+                          email: _email ?? 'Sin correo',
+                          dni: _dni,
+                          profileImage: _profileImage,
+                          initials: _initialsFromName(_nombre),
+                        ),
+                        const SizedBox(height: 18),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Hora actual',
+                                style: theme.textTheme.labelLarge?.copyWith(
+                                  fontWeight: FontWeight.w800,
+                                  color: const Color(0xFF2563EB),
+                                  letterSpacing: 0.8,
+                                ),
                               ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _timeSynced ? _formatTime(_now) : '--:--:--',
+                                style: theme.textTheme.displaySmall?.copyWith(
+                                  fontWeight: FontWeight.w800,
+                                  color: const Color(0xFF0F172A),
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _timeSynced
+                                    ? _formatDateFull(_now)
+                                    : 'Sin sincronización con servidor',
+                                style: theme.textTheme.bodyLarge?.copyWith(
+                                  color: const Color(0xFF64748B),
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        AnimatedScale(
+                          duration: const Duration(milliseconds: 220),
+                          curve: Curves.easeOut,
+                          scale: _inside == null ? 1.0 : 1.015,
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 260),
+                            switchInCurve: Curves.easeOut,
+                            switchOutCurve: Curves.easeOut,
+                            child: _StatusLocationCard(
+                              key: ValueKey(_inside),
+                              color: statusColor,
+                              icon: _statusIcon(),
+                              title: _locationStatusTitle(),
+                              badge:
+                                  pos != null
+                                      ? 'GPS ±${pos.accuracy.toStringAsFixed(0)} m'
+                                      : 'GPS --',
+                              subtitle: _locationStatusSubtitle(),
+                              progress: _locationProgressValue(),
+                              onRefresh: _locateAndCheck,
+                              helperText:
+                                  'Uso de emergencia: actualiza tu ubicación si el seguimiento automático falla.',
                             ),
                           ),
-
-                          const SizedBox(height: 12),
-
-                          // ===== CARD PRÓXIMA MARCACIÓN =====
-                          Card(
-                            elevation: 2,
+                        ),
+                        const SizedBox(height: 18),
+                        _PreviousCheckCard(
+                          lastMarkTime: _lastMarkTime,
+                          formatTime: _formatTime,
+                          formatDate: _formatSimpleDate,
+                        ),
+                        // const SizedBox(height: 18),
+                        // _NextMarkCard(nextType: _friendlyNextType(nextType)),
+                        const SizedBox(height: 28),
+                        ElevatedButton(
+                          onPressed:
+                              (_loading ||
+                                      !_timeSynced ||
+                                      _inside != true ||
+                                      _appBloqueada)
+                                  ? null
+                                  : _handleMark,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                                _inside == true
+                                    ? const Color(0xFF2563EB)
+                                    : const Color(0xFF94A3B8),
+                            disabledBackgroundColor: const Color(0xFFCBD5E1),
+                            foregroundColor: Colors.white,
+                            disabledForegroundColor: Colors.white70,
+                            elevation: _inside == true ? 8 : 0,
+                            shadowColor: const Color(0x552563EB),
+                            padding: const EdgeInsets.symmetric(vertical: 18),
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(10),
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: Colors.grey.shade400,
-                                      ),
-                                    ),
-                                    child: const Icon(
-                                      Icons.fingerprint,
-                                      size: 26,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Próxima marcación',
-                                          style: textTheme.labelMedium
-                                              ?.copyWith(
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          _friendlyNextType(nextType),
-                                          style: textTheme.titleLarge?.copyWith(
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          'Se alterna automáticamente entre ENTRADA y SALIDA según tu última marca.',
-                                          style: textTheme.bodySmall?.copyWith(
-                                            color: Colors.grey.shade700,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
+                              borderRadius: BorderRadius.circular(18),
                             ),
                           ),
-
-                          const SizedBox(height: 12),
-
-                          // ===== CARD ESTADO DE UBICACIÓN =====
-                          Card(
-                            elevation: 1,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (_loading)
+                                const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.4,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white,
+                                    ),
+                                  ),
+                                )
+                              else
+                                Icon(
+                                  _inside == true
+                                      ? Icons.fingerprint_rounded
+                                      : Icons.location_off_rounded,
+                                  size: 26,
+                                ),
+                              const SizedBox(width: 10),
+                              Flexible(
+                                child: Text(
+                                  _loading
+                                      ? 'Registrando...'
+                                      : (_inside == true
+                                          ? 'Registrar marcación'
+                                          : 'Fuera del perímetro'),
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          !_timeSynced
+                              ? 'No se puede marcar mientras no se sincronice la hora del servidor.'
+                              : (_inside == true
+                                  ? 'Tu ubicación es válida. Ya puedes realizar la marcación.'
+                                  : 'Estás fuera del perímetro permitido. El botón de marcación está deshabilitado hasta que vuelvas a ingresar.'),
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color:
+                                _inside == true
+                                    ? const Color(0xFF64748B)
+                                    : const Color(0xFFDC2626),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if (_appBloqueada) ...[
+                          const SizedBox(height: 20),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFEF2F2),
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(
+                                color: const Color(0xFFFECACA),
+                              ),
                             ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(
+                                  Icons.warning_amber_rounded,
+                                  color: Color(0xFFDC2626),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      const Icon(Icons.my_location, size: 20),
-                                      const SizedBox(width: 8),
                                       Text(
-                                        'Estado de ubicación',
-                                        style: textTheme.titleMedium?.copyWith(
-                                          fontWeight: FontWeight.w600,
-                                        ),
+                                        'Aplicación bloqueada',
+                                        style: theme.textTheme.titleSmall
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w800,
+                                              color: const Color(0xFF991B1B),
+                                            ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        _mensajeBloqueo,
+                                        style: theme.textTheme.bodyMedium
+                                            ?.copyWith(
+                                              color: const Color(0xFF7F1D1D),
+                                            ),
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 12),
-                                  Center(
-                                    child: Wrap(
-                                      alignment: WrapAlignment.center,
-                                      spacing: 12,
-                                      runSpacing: 8,
-                                      children: [
-                                        Chip(
-                                          avatar: Icon(
-                                            _inside == null
-                                                ? Icons.help_outline
-                                                : (_inside!
-                                                    ? Icons.check_circle
-                                                    : Icons
-                                                        .warning_amber_rounded),
-                                            size: 18,
-                                          ),
-                                          label: Text(
-                                            _inside == null
-                                                ? 'Sin estado'
-                                                : (_inside!
-                                                    ? 'Dentro del perímetro'
-                                                    : 'Fuera del perímetro'),
-                                            style: const TextStyle(
-                                              color: Colors.black,
-                                            ),
-                                          ),
-                                          backgroundColor:
-                                              _inside == null
-                                                  ? Colors.grey.shade300
-                                                  : (_inside!
-                                                      ? Colors.green.shade200
-                                                      : Colors.red.shade200),
-                                        ),
-                                        if (pos != null)
-                                          Chip(
-                                            avatar: const Icon(
-                                              Icons.gps_fixed,
-                                              size: 18,
-                                            ),
-                                            label: Text(
-                                              'Precisión: '
-                                              '${pos.accuracy.toStringAsFixed(1)} m'
-                                              '${_accuracyMax != null ? ' / máx: ${_accuracyMax!.toStringAsFixed(0)} m' : ''}',
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                  if (_distanceToCenter != null &&
-                                      _inside == false)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 8),
-                                      child: Text(
-                                        'Distancia aprox. al perímetro: '
-                                        '${_distanceToCenter!.toStringAsFixed(1)} m',
-                                        style: textTheme.bodySmall,
-                                      ),
-                                    ),
-                                  if (_inside == true)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 8),
-                                      child: Text(
-                                        'Te encuentras dentro del perímetro.',
-                                        style: textTheme.bodySmall,
-                                      ),
-                                    ),
-                                  const SizedBox(height: 8),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: TextButton.icon(
-                                      onPressed: _locateAndCheck,
-                                      icon: const Icon(Icons.my_location),
-                                      label: const Text('Actualizar ubicación'),
-                                      style: TextButton.styleFrom(
-                                        backgroundColor: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-
-                          const SizedBox(height: 24),
-
-                          // ===== BOTÓN PRINCIPAL =====
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: _loading ? null : _handleMark,
-                              icon:
-                                  _loading
-                                      ? const SizedBox(
-                                        width: 20,
-                                        height: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                      : const Icon(Icons.fingerprint),
-                              label: Text(
-                                _loading
-                                    ? 'Enviando...'
-                                    : 'Marcar ${_friendlyNextType(nextType)}',
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 16,
                                 ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Asegúrate de tener el GPS activado y estar dentro del perímetro antes de marcar.',
-                            textAlign: TextAlign.center,
-                            style: textTheme.bodySmall?.copyWith(
-                              color: Colors.grey.shade700,
+                              ],
                             ),
                           ),
                         ],
-                      ),
+                      ],
                     ),
                   ),
                 ),
               ],
             ),
           ),
-
-          // -------- CAPA DE BLOQUEO --------
           if (_appBloqueada)
-            AbsorbPointer(
-              absorbing: true,
-              child: Container(
-                alignment: Alignment.center,
-                color: Colors.black54,
-                padding: const EdgeInsets.all(24),
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.warning, size: 48),
-                        const SizedBox(height: 12),
-                        const Text(
-                          'Aplicación bloqueada',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(_mensajeBloqueo, textAlign: TextAlign.center),
-                        const SizedBox(height: 16),
-                        TextButton(
-                          onPressed: _mostrarDialogoBloqueo,
-                          child: const Text(
-                            'Más información',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+            Positioned.fill(
+              child: AbsorbPointer(
+                child: Container(color: Colors.black.withOpacity(0.12)),
               ),
             ),
         ],
@@ -1132,3 +1211,515 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     );
   }
 }
+
+class _ProfileCard extends StatelessWidget {
+  const _ProfileCard({
+    required this.nombre,
+    required this.email,
+    required this.dni,
+    required this.profileImage,
+    required this.initials,
+  });
+
+  final String nombre;
+  final String email;
+  final String? dni;
+  final String? profileImage;
+  final String initials;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFFDCEAFE)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x120F172A),
+            blurRadius: 18,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Stack(
+            children: [
+              Container(
+                width: 78,
+                height: 78,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0xFF2563EB),
+                    width: 2.5,
+                  ),
+                  gradient:
+                      (profileImage == null || profileImage!.trim().isEmpty)
+                          ? const LinearGradient(
+                            colors: [Color(0xFF2563EB), Color(0xFF60A5FA)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          )
+                          : null,
+                  image:
+                      (profileImage != null && profileImage!.trim().isNotEmpty)
+                          ? DecorationImage(
+                            image: NetworkImage(profileImage!),
+                            fit: BoxFit.cover,
+                          )
+                          : null,
+                ),
+                child:
+                    (profileImage == null || profileImage!.trim().isEmpty)
+                        ? Center(
+                          child: Text(
+                            initials,
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        )
+                        : null,
+              ),
+              Positioned(
+                right: 2,
+                bottom: 2,
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF22C55E),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  nombre,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFF0F172A),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  email,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: const Color(0xFF64748B),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (dni != null && dni!.trim().isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      'DNI: $dni',
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: const Color(0xFF2563EB),
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusLocationCard extends StatelessWidget {
+  const _StatusLocationCard({
+    super.key,
+    required this.color,
+    required this.icon,
+    required this.title,
+    required this.badge,
+    required this.subtitle,
+    required this.progress,
+    required this.onRefresh,
+    required this.helperText,
+  });
+
+  final Color color;
+  final IconData icon;
+  final String title;
+  final String badge;
+  final String subtitle;
+  final double progress;
+  final VoidCallback onRefresh;
+  final String helperText;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOut,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: color.withOpacity(0.26), width: 1.4),
+        boxShadow: [
+          BoxShadow(
+            color: color.withOpacity(0.10),
+            blurRadius: 22,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOut,
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 220),
+                  transitionBuilder: (child, animation) {
+                    return ScaleTransition(scale: animation, child: child);
+                  },
+                  child: Icon(
+                    icon,
+                    key: ValueKey(icon),
+                    color: color,
+                    size: 28,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: AnimatedDefaultTextStyle(
+                            duration: const Duration(milliseconds: 220),
+                            curve: Curves.easeOut,
+                            style: theme.textTheme.titleMedium!.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: color,
+                            ),
+                            child: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 260),
+                          curve: Curves.easeOut,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(0.10),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            badge,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: color,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      subtitle,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF64748B),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 260),
+                      curve: Curves.easeOut,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: LinearProgressIndicator(
+                          minHeight: 8,
+                          value: progress,
+                          backgroundColor: const Color(0xFFE5E7EB),
+                          valueColor: AlwaysStoppedAnimation<Color>(color),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Precisión',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: const Color(0xFF94A3B8),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        Text(
+                          'Margen permitido',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: const Color(0xFF94A3B8),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Divider(height: 1),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text(
+                  helperText,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF94A3B8),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              FilledButton.tonalIcon(
+                onPressed: onRefresh,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFEFF6FF),
+                  foregroundColor: const Color(0xFF2563EB),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                icon: const Icon(Icons.my_location_rounded, size: 18),
+                label: const Text(
+                  'Actualizar',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PreviousCheckCard extends StatelessWidget {
+  const _PreviousCheckCard({
+    required this.lastMarkTime,
+    required this.formatTime,
+    required this.formatDate,
+  });
+
+  final DateTime? lastMarkTime;
+  final String Function(DateTime) formatTime;
+  final String Function(DateTime) formatDate;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasMark = lastMarkTime != null;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFFDCEAFE)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x120F172A),
+            blurRadius: 18,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.history_rounded,
+                      size: 18,
+                      color: Color(0xFF64748B),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Última marcación',
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: const Color(0xFF64748B),
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  hasMark ? formatTime(lastMarkTime!) : '--:--:--',
+                  style: theme.textTheme.headlineMedium?.copyWith(
+                    color: const Color(0xFF0F172A),
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  hasMark
+                      ? 'Registrada el ${formatDate(lastMarkTime!)}'
+                      : 'Aún no hay registros disponibles.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: const Color(0xFF64748B),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Container(
+            width: 58,
+            height: 58,
+            decoration: BoxDecoration(
+              color: const Color(0xFFDCFCE7),
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0xFFBBF7D0)),
+            ),
+            child: const Icon(
+              Icons.check_circle_rounded,
+              color: Color(0xFF16A34A),
+              size: 32,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// class _NextMarkCard extends StatelessWidget {
+//   const _NextMarkCard({required this.nextType});
+
+//   final String nextType;
+
+//   @override
+//   Widget build(BuildContext context) {
+//     final theme = Theme.of(context);
+
+//     return Container(
+//       padding: const EdgeInsets.all(18),
+//       decoration: BoxDecoration(
+//         color: Colors.white,
+//         borderRadius: BorderRadius.circular(24),
+//         border: Border.all(color: const Color(0xFFDCEAFE)),
+//         boxShadow: const [
+//           BoxShadow(
+//             color: Color(0x120F172A),
+//             blurRadius: 18,
+//             offset: Offset(0, 8),
+//           ),
+//         ],
+//       ),
+//       child: Row(
+//         children: [
+//           Container(
+//             width: 54,
+//             height: 54,
+//             decoration: BoxDecoration(
+//               shape: BoxShape.circle,
+//               border: Border.all(color: const Color(0xFFCBD5E1), width: 1.4),
+//             ),
+//             child: const Icon(
+//               Icons.fingerprint_rounded,
+//               color: Color(0xFF0F172A),
+//               size: 28,
+//             ),
+//           ),
+//           const SizedBox(width: 14),
+//           Expanded(
+//             child: Column(
+//               crossAxisAlignment: CrossAxisAlignment.start,
+//               children: [
+//                 Text(
+//                   'Próxima marcación',
+//                   style: theme.textTheme.labelLarge?.copyWith(
+//                     color: const Color(0xFF64748B),
+//                     fontWeight: FontWeight.w800,
+//                   ),
+//                 ),
+//                 const SizedBox(height: 4),
+//                 Text(
+//                   nextType,
+//                   style: theme.textTheme.titleLarge?.copyWith(
+//                     color: const Color(0xFF0F172A),
+//                     fontWeight: FontWeight.w800,
+//                   ),
+//                 ),
+//                 const SizedBox(height: 4),
+//                 Text(
+//                   'El sistema alterna automáticamente entre entrada y salida según tu último registro.',
+//                   style: theme.textTheme.bodySmall?.copyWith(
+//                     color: const Color(0xFF64748B),
+//                     fontWeight: FontWeight.w500,
+//                   ),
+//                 ),
+//               ],
+//             ),
+//           ),
+//         ],
+//       ),
+//     );
+//   }
+// }

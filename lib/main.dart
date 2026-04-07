@@ -1,4 +1,6 @@
 import 'package:asistenciapersonal1/firebase_options.dart';
+import 'package:asistenciapersonal1/pages/eliminar.dart';
+import 'package:asistenciapersonal1/pages/marcacion_asistencia_page.dart';
 import 'package:asistenciapersonal1/pages/roots_page.dart';
 import 'package:asistenciapersonal1/theme/app_theme.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -19,8 +21,8 @@ class AsistenciaApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.theme,
       home: RootPage(),
-      // home: MarcacionPage(),
-      // home: LoginPage(),
+      // home: MarcacionAsistenciaPage(),
+      // home: SignInDemo(),
     );
   }
 }

@@ -1,44 +1,65 @@
-// lib/services/auth_service.dart
-import 'dart:io';
+import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+class AuthResult {
+  final User user;
+  final String? resolvedPhotoUrl;
+
+  AuthResult({required this.user, required this.resolvedPhotoUrl});
+}
+
 class AuthService {
   AuthService._();
-  static const _deviceIdKey = 'device_id';
-  final _uuid = const Uuid();
-  static final AuthService instance = AuthService._();
 
+  static final AuthService instance = AuthService._();
+  static const _deviceIdKey = 'device_id';
+
+  final _uuid = const Uuid();
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
   bool _googleInitialized = false;
 
-  // ==================== HELPERS ====================
+  String _emailToDocId(String email) {
+    return email.toLowerCase().trim().split('@').first;
+  }
+
+  void _showSnack(BuildContext context, String message) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  Future<void> _ensureGoogleInitialized() async {
+    if (_googleInitialized) return;
+    await _googleSignIn.initialize();
+    _googleInitialized = true;
+  }
 
   Future<String?> _getDniFromEmail(String? email) async {
     if (email == null || email.isEmpty) return null;
 
     final normalized = email.toLowerCase().trim();
-
     final doc = await _db.collection('dni_by_email').doc(normalized).get();
-    if (!doc.exists) return null;
 
-    final data = doc.data();
-    return data?['dni'] as String?;
+    if (!doc.exists) return null;
+    return doc.data()?['dni'] as String?;
   }
 
   Future<String> _getDeviceId() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-
       final saved = prefs.getString(_deviceIdKey);
+
       if (saved != null && saved.isNotEmpty) {
         return saved;
       }
@@ -51,96 +72,185 @@ class AuthService {
     }
   }
 
-  void _showSnack(BuildContext context, String message) {
-    if (!context.mounted) return;
-    debugPrint(message);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
-    );
+  Future<String?> _fetchPhotoFromUserInfo(String accessToken) async {
+    try {
+      final res = await http.get(
+        Uri.parse('https://www.googleapis.com/oauth2/v3/userinfo'),
+        headers: {
+          'Authorization': 'Bearer $accessToken',
+          'X-Goog-AuthUser': '0',
+        },
+      );
+
+      debugPrint('userinfo status: ${res.statusCode}');
+      debugPrint('userinfo body: ${res.body}');
+
+      if (res.statusCode != 200) return null;
+
+      final data = json.decode(res.body) as Map<String, dynamic>;
+      final picture = data['picture'] as String?;
+
+      if (picture == null || picture.trim().isEmpty) return null;
+      return picture.trim();
+    } catch (e) {
+      debugPrint('Error userinfo photo: $e');
+      return null;
+    }
   }
 
-  // ==================== LOGIN CON GOOGLE ====================
-
-  Future<void> signInWithGoogle(BuildContext context) async {
+  Future<String?> _fetchPhotoFromPeopleApi(String accessToken) async {
     try {
-      if (!_googleInitialized) {
-        await _googleSignIn.initialize();
-        _googleInitialized = true;
-      }
+      final res = await http.get(
+        Uri.parse(
+          'https://people.googleapis.com/v1/people/me?personFields=photos',
+        ),
+        headers: {
+          'Authorization': 'Bearer $accessToken',
+          'X-Goog-AuthUser': '0',
+        },
+      );
+
+      debugPrint('people/me status: ${res.statusCode}');
+      debugPrint('people/me body: ${res.body}');
+
+      if (res.statusCode != 200) return null;
+
+      final data = json.decode(res.body) as Map<String, dynamic>;
+      final photos = (data['photos'] as List?) ?? [];
+
+      if (photos.isEmpty) return null;
+
+      final first = photos.first;
+      if (first is! Map<String, dynamic>) return null;
+
+      final url = first['url'] as String?;
+      if (url == null || url.trim().isEmpty) return null;
+
+      return url.trim();
+    } catch (e) {
+      debugPrint('Error people api photo: $e');
+      return null;
+    }
+  }
+
+  Future<String?> _resolvePhotoUrl({
+    required GoogleSignInAccount googleUser,
+    required User firebaseUser,
+  }) async {
+    String? url;
+
+    if (googleUser.photoUrl != null && googleUser.photoUrl!.trim().isNotEmpty) {
+      url = googleUser.photoUrl!.trim();
+    }
+
+    if ((url == null || url.isEmpty) &&
+        firebaseUser.photoURL != null &&
+        firebaseUser.photoURL!.trim().isNotEmpty) {
+      url = firebaseUser.photoURL!.trim();
+    }
+
+    return url;
+  }
+
+  Future<AuthResult?> signInWithGoogle(BuildContext context) async {
+    try {
+      await _ensureGoogleInitialized();
 
       GoogleSignInAccount? googleUser;
 
       if (_googleSignIn.supportsAuthenticate()) {
         googleUser = await _googleSignIn.authenticate();
-      } else {
-        throw Exception(
-          'Este dispositivo no soporta authenticate(); revisa la config de GoogleSignIn.',
-        );
       }
 
-      if (googleUser == null) {
-        _showSnack(context, 'Inicio de sesión cancelado.');
-        return;
-      }
+      if (googleUser == null) return null;
 
-      // ⚠️ VALIDAR DOMINIO ANTES DE IR A FIREBASE
       const allowedDomain = 'lasalle.edu.pe';
-      final email = googleUser.email;
-      final domain = email.split('@').length == 2 ? email.split('@')[1] : '';
+      final email = googleUser.email.trim().toLowerCase();
 
-      if (domain.toLowerCase() != allowedDomain.toLowerCase()) {
-        if (context.mounted) {
-          await showDialog(
-            context: context,
-            builder:
-                (_) => AlertDialog(
-                  title: const Text('Dominio no permitido'),
-                  content: Text(
-                    'Solo se permiten cuentas de $allowedDomain.\n\n'
-                    'Tu correo actual es: $email',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Entendido'),
-                    ),
-                  ],
-                ),
-          );
-        }
-
-        await _googleSignIn.disconnect();
-        return;
+      if (!email.endsWith('@$allowedDomain')) {
+        try {
+          await _googleSignIn.disconnect();
+        } catch (_) {}
+        _showSnack(
+          context,
+          'Solo se permite el ingreso con correos institucionales.',
+        );
+        return null;
       }
 
-      // 👉 Si el dominio es válido recién ahora vamos a FirebaseAuth
       final googleAuth = await googleUser.authentication;
 
       final credential = GoogleAuthProvider.credential(
         idToken: googleAuth.idToken,
       );
+      final userCredential = await _auth.signInWithCredential(credential);
+      final firebaseUser = userCredential.user;
 
-      await _auth.signInWithCredential(credential);
-      // A partir de aquí, RootPage se entera de que hay usuario y hará
-      // verifyAccessForUser(user) antes de mostrar la pantalla de marcación.
+      if (firebaseUser == null) return null;
+
+      final resolvedPhoto = await _resolvePhotoUrl(
+        googleUser: googleUser,
+        firebaseUser: firebaseUser,
+      );
+
+      final docId = _emailToDocId(email);
+
+      await _db.collection('users').doc(docId).set({
+        'email': email,
+        'name': firebaseUser.displayName ?? googleUser.displayName,
+        'photoUrl': resolvedPhoto,
+        'firebaseUid': firebaseUser.uid,
+        'lastLogin': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      return AuthResult(user: firebaseUser, resolvedPhotoUrl: resolvedPhoto);
     } catch (e) {
       _showSnack(context, 'Error al iniciar sesión: $e');
+      return null;
     }
   }
 
-  // ==================== VERIFICAR ACCESO (DNI + DISPOSITIVO) ====================
+  Future<void> signOut(BuildContext context) async {
+    try {
+      await _ensureGoogleInitialized();
 
-  /// Devuelve true si el usuario puede usar la app en este dispositivo.
-  /// Devuelve false si se bloquea (sin DNI o en otro dispositivo).
+      await _auth.signOut();
+
+      try {
+        await _googleSignIn.disconnect();
+      } catch (_) {
+        try {
+          await _googleSignIn.signOut();
+        } catch (_) {}
+      }
+
+      if (!context.mounted) return;
+
+      Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+    } catch (e) {
+      _showSnack(context, 'Error al cerrar sesión: $e');
+    }
+  }
+
   Future<bool> verifyAccessForUser(BuildContext context, User user) async {
     final deviceId = await _getDeviceId();
-    final docRef = _db.collection('users').doc(user.uid);
+    final email = user.email?.trim().toLowerCase();
+
+    if (email == null || email.isEmpty) {
+      await _auth.signOut();
+      try {
+        await _googleSignIn.disconnect();
+      } catch (_) {}
+      return false;
+    }
+
+    final docId = _emailToDocId(email);
+    final docRef = _db.collection('users').doc(docId);
     final doc = await docRef.get();
 
-    // 1) Buscar DNI
-    final dni = await _getDniFromEmail(user.email);
+    final dni = await _getDniFromEmail(email);
+
     if (dni == null) {
-      // 🔹 Primero mostramos el mensaje
       if (context.mounted) {
         await showDialog(
           context: context,
@@ -155,20 +265,28 @@ class AuthService {
         );
       }
 
-      // 🔹 Luego cerramos sesión
       await _auth.signOut();
-      await _googleSignIn.disconnect();
-
+      try {
+        await _googleSignIn.disconnect();
+      } catch (_) {}
       return false;
     }
 
-    // 2) Primera vez o sin deviceId -> asociar este dispositivo
+    final existingData = doc.data();
+    final existingPhotoUrl = existingData?['photoUrl'] as String?;
+    final newPhotoUrl =
+        (user.photoURL != null && user.photoURL!.trim().isNotEmpty)
+            ? user.photoURL!.trim()
+            : existingPhotoUrl;
+
     if (!doc.exists || doc.data()?['deviceId'] == null) {
       await docRef.set({
-        'email': user.email,
+        'email': email,
         'name': user.displayName,
         'deviceId': deviceId,
         'dni': dni,
+        'photoUrl': newPhotoUrl,
+        'firebaseUid': user.uid,
         'lastLogin': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -178,18 +296,16 @@ class AuthService {
 
     final savedDeviceId = doc.data()!['deviceId'] as String;
 
-    // 3) Mismo dispositivo -> permitir
     if (savedDeviceId == deviceId) {
       await docRef.update({
         'lastLogin': FieldValue.serverTimestamp(),
         'dni': dni,
+        'photoUrl': newPhotoUrl,
+        'firebaseUid': user.uid,
       });
-      _showSnack(context, 'Bienvenido nuevamente.');
       return true;
     }
 
-    // 4) Otro dispositivo -> BLOQUEAR
-    // 🔹 Primero mostramos el mensaje
     if (context.mounted) {
       await showDialog(
         context: context,
@@ -198,7 +314,7 @@ class AuthService {
               title: const Text('Acceso restringido'),
               content: const Text(
                 'Esta cuenta ya está asociada a otro dispositivo.\n\n'
-                'Para usarla en este celular/computadora, '
+                'Para usarla en este celular o computadora, '
                 'debes comunicarte con el administrador del sistema.',
               ),
               actions: [
@@ -211,10 +327,10 @@ class AuthService {
       );
     }
 
-    // 🔹 Luego cerramos sesión
     await _auth.signOut();
-    await _googleSignIn.disconnect();
-
+    try {
+      await _googleSignIn.disconnect();
+    } catch (_) {}
     return false;
   }
 }
