@@ -22,6 +22,14 @@
           }
         },
         {
+          "client_id": "125091434839-i1soqlq22g7kq4qfggka7ls1jjp7283n.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lasalle.asistenciapersonal1",
+            "certificate_hash": "cfc132099e4c393ee61d94457f57201fe19b1dcf"
+          }
+        },
+        {
           "client_id": "125091434839-l0jruav6pjohehn3t1imjvge46pdde4j.apps.googleusercontent.com",
           "client_type": 3
         }
