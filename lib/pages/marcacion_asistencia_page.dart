@@ -30,7 +30,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   final _auth = FirebaseAuth.instance;
   final _db = FirebaseFirestore.instance;
   bool _testOutside = false;
-  Duration? _serverOffset;
   bool _timeSynced = false;
 
   bool _loading = false;
@@ -414,19 +413,18 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   Future<void> _syncTimeFromNTP() async {
     try {
       final ntpNow = await NTP.now();
-      final deviceNow = DateTime.now();
-      final offset = ntpNow.difference(deviceNow);
 
       if (!mounted) return;
+
       setState(() {
-        _serverOffset = offset;
-        _now = ntpNow;
+        _now = ntpNow.toLocal();
         _timeSynced = true;
       });
     } catch (e) {
       debugPrint('Error NTP: $e');
 
       if (!mounted) return;
+
       setState(() {
         _timeSynced = false;
       });
@@ -434,7 +432,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'No se pudo sincronizar la hora del servidor. Verifica tu conexión.',
+            'No se pudo sincronizar la hora NTP. Verifica tu conexión.',
           ),
         ),
       );
@@ -444,15 +442,21 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   void _startClock() {
     _syncTimeFromNTP();
 
-    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted || !_timeSynced || _serverOffset == null) return;
+    int ticks = 0;
 
-      final deviceNow = DateTime.now();
-      final displayNow = deviceNow.add(_serverOffset!);
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      if (!mounted || !_timeSynced) return;
 
       setState(() {
-        _now = displayNow;
+        _now = _now.add(const Duration(seconds: 1));
       });
+
+      ticks++;
+
+      if (ticks >= 60) {
+        ticks = 0;
+        await _syncTimeFromNTP();
+      }
     });
   }
 
@@ -761,14 +765,11 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       _mostrarDialogoBloqueo();
       return;
     }
-
-    if (!_timeSynced || _serverOffset == null) {
+    if (!_timeSynced) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text(
-              'No se puede marcar sin sincronizar la hora del servidor.',
-            ),
+            content: Text('No se puede marcar sin sincronizar la hora NTP.'),
           ),
         );
       }
@@ -969,10 +970,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final pos = _position;
-    final logicalNow =
-        (_timeSynced && _serverOffset != null)
-            ? DateTime.now().add(_serverOffset!)
-            : _now;
+
     final statusColor = _statusColor(context);
 
     return Scaffold(
