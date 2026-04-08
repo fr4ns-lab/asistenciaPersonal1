@@ -1,5 +1,6 @@
 // services/transaction_api.dart
 import 'dart:convert';
+import 'package:asistenciapersonal1/models/last_transaction.dart';
 import 'package:http/http.dart' as http;
 import '../models/transaction_request.dart';
 
@@ -21,5 +22,19 @@ class TransactionApi {
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw Exception('Error API ${resp.statusCode}: ${resp.body}');
     }
+  }
+
+  Future<LastTransaction> getLastTransaction(String empCode) async {
+    final url = Uri.parse(
+      '$baseUrl/api/logs/ultimo-registro/$empCode',
+    ); // 👈 ruta de FastAPI
+
+    final resp = await http.get(url);
+
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw Exception('Error API ${resp.statusCode}: ${resp.body}');
+    }
+
+    return lastTransactionFromJson(resp.body);
   }
 }

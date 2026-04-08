@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show InternetAddress, Platform;
 
+import 'package:asistenciapersonal1/models/last_transaction.dart';
 import 'package:asistenciapersonal1/models/transaction_request.dart';
 import 'package:asistenciapersonal1/services/auth_service.dart';
 import 'package:asistenciapersonal1/services/transaction_api.dart';
@@ -60,7 +61,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   StreamSubscription<Position>? _posSub;
 
   late final TransactionApi _api;
-
   @override
   void initState() {
     super.initState();
@@ -73,7 +73,11 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     });
 
     _startClock();
-    _initUserData();
+    _initUserData().then((_) async {
+      if (_dni != null && _dni!.isNotEmpty) {
+        await _refreshLastMark();
+      }
+    });
     _initLocationTracking();
   }
 
@@ -112,6 +116,15 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       return result.isNotEmpty && result.first.rawAddress.isNotEmpty;
     } catch (_) {
       return false;
+    }
+  }
+
+  Future<LastTransaction> getLastTransaction(String empCode) async {
+    try {
+      return await _api.getLastTransaction(empCode);
+    } catch (e) {
+      debugPrint('Error al obtener última transacción: $e');
+      rethrow;
     }
   }
 
@@ -466,13 +479,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
           (photoFromDb != null && photoFromDb.trim().isNotEmpty)
               ? photoFromDb.trim()
               : user.photoURL;
-
-      final lastType = data?['lastMarkType'] as String?;
-      final lastTimeTS = data?['lastMarkTime'];
-
-      if (lastType != null && lastTimeTS is Timestamp) {
-        _lastMarkTime = lastTimeTS.toDate();
-      }
     });
   }
 
@@ -728,6 +734,19 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     await _api.sendTransaction(tx);
   }
 
+  Future<void> _refreshLastMark() async {
+    try {
+      final lastTx = await getLastTransaction(_dni!);
+      if (!mounted) return;
+
+      setState(() {
+        _lastMarkTime = lastTx.data.punchTime;
+      });
+    } catch (e) {
+      debugPrint("Error refrescando última marcación: $e");
+    }
+  }
+
   Future<void> _handleMark() async {
     if (!_serviciosOk()) {
       if (mounted) {
@@ -737,6 +756,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       }
       return;
     }
+
     if (_appBloqueada) {
       _mostrarDialogoBloqueo();
       return;
@@ -769,18 +789,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       return;
     }
 
-    final email = user.email?.trim().toLowerCase();
-    if (email == null || email.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No se pudo identificar el correo del usuario.'),
-          ),
-        );
-      }
-      return;
-    }
-
     if (_dni == null || _dni!.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -799,9 +807,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     });
 
     try {
-      final nowDevice = DateTime.now();
-      final now = nowDevice.add(_serverOffset!);
-
       await _locateAndCheck();
 
       final pos = _position;
@@ -828,17 +833,9 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
         lng: pos.longitude,
       );
 
-      final docId = _userDocIdFromEmail(email);
-
-      await _db.collection('users').doc(docId).update({
-        'lastMarkTime': Timestamp.fromDate(now),
-      });
+      await _refreshLastMark();
 
       if (!mounted) return;
-
-      setState(() {
-        _lastMarkTime = now;
-      });
 
       await _showSuccessPopup();
     } catch (e) {
@@ -979,11 +976,11 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     final statusColor = _statusColor(context);
 
     return Scaffold(
-      floatingActionButton: FloatingActionButton(
-        onPressed: _toggleTestLocation,
-        backgroundColor: _testOutside ? Colors.red : Colors.green,
-        child: Icon(_testOutside ? Icons.location_off : Icons.location_on),
-      ),
+      // floatingActionButton: FloatingActionButton(
+      //   onPressed: _toggleTestLocation,
+      //   backgroundColor: _testOutside ? Colors.red : Colors.green,
+      //   child: Icon(_testOutside ? Icons.location_off : Icons.location_on),
+      // ),
       backgroundColor: const Color(0xFFF4F8FF),
       body: Stack(
         children: [
