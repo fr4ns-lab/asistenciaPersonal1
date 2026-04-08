@@ -998,24 +998,24 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
                           ),
                         ),
                       ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: const Color(0xFFE2E8F0)),
-                        ),
-                        child: IconButton(
-                          onPressed:
-                              _appBloqueada ? _mostrarDialogoBloqueo : null,
-                          icon: Icon(
-                            Icons.settings_outlined,
-                            color:
-                                _appBloqueada
-                                    ? const Color(0xFF2563EB)
-                                    : const Color(0xFF64748B),
-                          ),
-                        ),
-                      ),
+                      // Container(
+                      //   decoration: BoxDecoration(
+                      //     color: Colors.white,
+                      //     borderRadius: BorderRadius.circular(16),
+                      //     border: Border.all(color: const Color(0xFFE2E8F0)),
+                      //   ),
+                      //   child: IconButton(
+                      //     onPressed:
+                      //         _appBloqueada ? _mostrarDialogoBloqueo : null,
+                      //     icon: Icon(
+                      //       Icons.settings_outlined,
+                      //       color:
+                      //           _appBloqueada
+                      //               ? const Color(0xFF2563EB)
+                      //               : const Color(0xFF64748B),
+                      //     ),
+                      //   ),
+                      // ),
                       Container(
                         decoration: BoxDecoration(
                           color: Colors.white,
