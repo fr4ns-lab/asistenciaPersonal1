@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io' show InternetAddress, Platform;
-
+import 'dart:math' as Math;
 import 'package:asistenciapersonal1/models/last_transaction.dart';
 import 'package:asistenciapersonal1/models/transaction_request.dart';
 import 'package:asistenciapersonal1/services/auth_service.dart';
@@ -22,8 +22,12 @@ class MarcacionAsistenciaPage extends StatefulWidget {
       _MarcacionAsistenciaPageState();
 }
 
-class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
+class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
+    with WidgetsBindingObserver {
   bool _gpsActivo = true;
+  Duration _serverOffset = Duration.zero;
+  DateTime? _lastNtpSyncAt;
+  bool _ntpInitialized = false;
   bool _internetActivo = true;
   bool _validandoServicios = true;
   Timer? _servicesTimer;
@@ -31,7 +35,10 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   final _db = FirebaseFirestore.instance;
   bool _testOutside = false;
   bool _timeSynced = false;
-
+  Timer? _debounceMoveCamera;
+  DateTime? _lastAcceptedFixTime;
+  static const double _minMovementMeters = 3;
+  static const double _maxAcceptedAccuracyFallback = 25;
   bool _loading = false;
   String? _dni;
   String? _nombre;
@@ -63,6 +70,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _cargarInfoVersionYEscucharEstado();
     _api = TransactionApi(baseUrl: 'https://apiasistencia.lasalle.edu.pe');
 
@@ -82,9 +90,11 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _clockTimer?.cancel();
     _servicesTimer?.cancel();
     _posSub?.cancel();
+    _debounceMoveCamera?.cancel();
     _mapCtrl?.dispose();
     _mapCtrl = null;
     super.dispose();
@@ -410,54 +420,86 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     );
   }
 
-  Future<void> _syncTimeFromNTP() async {
+  Future<void> _syncTimeFromNTP({bool silent = false}) async {
     try {
       final ntpNow = await NTP.now();
+      final deviceNow = DateTime.now();
 
       if (!mounted) return;
 
       setState(() {
-        _now = ntpNow.toLocal();
+        _serverOffset = ntpNow.difference(deviceNow);
+        _now = deviceNow.add(_serverOffset);
         _timeSynced = true;
+        _ntpInitialized = true;
+        _lastNtpSyncAt = DateTime.now();
       });
     } catch (e) {
       debugPrint('Error NTP: $e');
 
       if (!mounted) return;
 
+      // No mates el reloj si ya hubo una sincronización previa
       setState(() {
-        _timeSynced = false;
+        if (!_ntpInitialized) {
+          _timeSynced = false;
+        }
+        _now = DateTime.now().add(_serverOffset);
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'No se pudo sincronizar la hora NTP. Verifica tu conexión.',
+      if (!silent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No se pudo revalidar la hora del servidor. Se seguirá usando la última sincronización.',
+            ),
           ),
-        ),
-      );
+        );
+      }
     }
   }
 
   void _startClock() {
     _syncTimeFromNTP();
 
-    int ticks = 0;
-
+    _clockTimer?.cancel();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      if (!mounted || !_timeSynced) return;
+      if (!mounted) return;
 
       setState(() {
-        _now = _now.add(const Duration(seconds: 1));
+        _now = DateTime.now().add(_serverOffset);
       });
 
-      ticks++;
+      final shouldResync =
+          _lastNtpSyncAt == null ||
+          DateTime.now().difference(_lastNtpSyncAt!).inMinutes >= 1;
 
-      if (ticks >= 60) {
-        ticks = 0;
-        await _syncTimeFromNTP();
+      if (shouldResync) {
+        await _syncTimeFromNTP(silent: true);
       }
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      Future.microtask(() async {
+        if (!mounted) return;
+
+        await _validarServiciosRequeridos();
+
+        if (!mounted) return;
+        await _syncTimeFromNTP(silent: true);
+
+        if (!mounted) return;
+
+        try {
+          await _locateAndCheck();
+        } catch (e) {
+          debugPrint('Error al reanudar ubicación: $e');
+        }
+      });
+    }
   }
 
   Future<void> _initUserData() async {
@@ -534,6 +576,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
           pts.add(LatLng(p.latitude, p.longitude));
           continue;
         }
+
         if (p is Map) {
           if (p['lat'] != null && p['lng'] != null) {
             final lat = (p['lat'] as num).toDouble();
@@ -541,12 +584,14 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
             pts.add(LatLng(lat, lng));
             continue;
           }
+
           if (p['geopoint'] is GeoPoint) {
             final g = p['geopoint'] as GeoPoint;
             pts.add(LatLng(g.latitude, g.longitude));
             continue;
           }
         }
+
         if (p is String) {
           final parsed = _parseLatLngString(p);
           if (parsed != null) {
@@ -554,6 +599,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
             continue;
           }
         }
+
         debugPrint('Tipo no soportado en points: ${p.runtimeType} -> $p');
       }
 
@@ -561,7 +607,11 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       _polygon = pts;
 
       if (!mounted) return;
+
       setState(() {});
+
+      await Future.delayed(const Duration(milliseconds: 250));
+      await _fitMapToPolygon();
     } catch (e) {
       debugPrint('Error al cargar geofence: $e');
       if (mounted) {
@@ -649,22 +699,91 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     return inside;
   }
 
-  Future<void> _locateAndCheck() async {
-    final ok = await _ensurePermissions();
-    if (!ok) return;
+  double _clamp(double value, double min, double max) {
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
+  }
 
-    var pos = await Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.bestForNavigation,
+  void _moveCameraSoft(Position pos) {
+    if (_mapCtrl == null) return;
+
+    _debounceMoveCamera?.cancel();
+    _debounceMoveCamera = Timer(const Duration(milliseconds: 350), () {
+      _mapCtrl?.animateCamera(
+        CameraUpdate.newLatLng(LatLng(pos.latitude, pos.longitude)),
+      );
+    });
+  }
+
+  Future<void> _fitMapToPolygon() async {
+    if (_mapCtrl == null || _polygon.isEmpty) return;
+
+    double minLat = _polygon.first.latitude;
+    double maxLat = _polygon.first.latitude;
+    double minLng = _polygon.first.longitude;
+    double maxLng = _polygon.first.longitude;
+
+    for (final p in _polygon) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+
+    final bounds = LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
     );
 
-    if (_accuracyMax != null && pos.accuracy > _accuracyMax!) {
+    await _mapCtrl!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 70));
+  }
+
+  Future<Position?> _getBestAccuratePosition() async {
+    final ok = await _ensurePermissions();
+    if (!ok) return null;
+
+    Position? best;
+
+    Future<void> tryRead({
+      required LocationAccuracy accuracy,
+      Duration? timeLimit,
+    }) async {
       try {
-        pos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.bestForNavigation,
-          timeLimit: const Duration(seconds: 5),
+        final pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: accuracy,
+          timeLimit: timeLimit,
         );
+
+        debugPrint('Lectura GPS -> ${pos.accuracy} m');
+
+        if (best == null || pos.accuracy < best!.accuracy) {
+          best = pos;
+        }
       } catch (_) {}
     }
+
+    // 🔥 SOLO intentos rápidos (sin delay)
+    await tryRead(
+      accuracy: LocationAccuracy.bestForNavigation,
+      timeLimit: const Duration(seconds: 5),
+    );
+
+    if (best != null &&
+        _accuracyMax != null &&
+        best!.accuracy > _accuracyMax!) {
+      await tryRead(
+        accuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 5),
+      );
+    }
+
+    return best;
+  }
+
+  Future<void> _locateAndCheck() async {
+    final pos = await _getBestAccuratePosition();
+    if (pos == null) return;
 
     bool nowInside = false;
     if (_polygon.isNotEmpty) {
@@ -673,9 +792,11 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
         _polygon,
       );
     }
+
     final prevInside = _inside;
     _position = pos;
     _inside = nowInside;
+    _lastAcceptedFixTime = DateTime.now();
 
     if (_polygon.isNotEmpty) {
       _distanceToCenter = _inside == true ? 0 : _distanceToPolygon(pos);
@@ -688,24 +809,50 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
     if (prevInside != null && prevInside != nowInside) {
       _notifyPerimeterChange(nowInside);
     }
+
+    _moveCameraSoft(pos);
   }
 
   void _listenPosition() {
     _posSub?.cancel();
+
     _posSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 5,
+        distanceFilter: 3,
       ),
     ).listen((pos) {
+      final maxAllowed = _accuracyMax ?? _maxAcceptedAccuracyFallback;
+
+      // 1. descartar lecturas imprecisas
+      if (pos.accuracy > maxAllowed) {
+        return;
+      }
+
+      // 2. descartar micro saltos falsos
+      if (_position != null) {
+        final dist = Geolocator.distanceBetween(
+          _position!.latitude,
+          _position!.longitude,
+          pos.latitude,
+          pos.longitude,
+        );
+
+        if (dist < _minMovementMeters && pos.accuracy >= _position!.accuracy) {
+          return;
+        }
+      }
+
       final nowInside =
           _polygon.isNotEmpty
               ? _pointInPolygon(LatLng(pos.latitude, pos.longitude), _polygon)
               : false;
 
       final changed = (_inside != null && _inside != nowInside);
+
       _position = pos;
       _inside = nowInside;
+      _lastAcceptedFixTime = DateTime.now();
 
       if (_polygon.isNotEmpty) {
         _distanceToCenter = _inside == true ? 0 : _distanceToPolygon(pos);
@@ -718,6 +865,8 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
       if (changed) {
         _notifyPerimeterChange(nowInside);
       }
+
+      _moveCameraSoft(pos);
     });
   }
 
@@ -812,6 +961,45 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
 
       final pos = _position;
       final isInside = _inside ?? false;
+      final maxAllowed = _accuracyMax ?? _maxAcceptedAccuracyFallback;
+      final now = DateTime.now();
+      final isRecentFix =
+          _lastAcceptedFixTime != null &&
+          now.difference(_lastAcceptedFixTime!).inSeconds <= 15;
+
+      if (!isRecentFix) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Tu ubicación no está actualizada. Espera unos segundos o pulsa actualizar ubicación.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      if (pos == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No se pudo obtener tu ubicación actual.'),
+          ),
+        );
+        return;
+      }
+
+      if (pos.accuracy > maxAllowed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+            content: Text(
+              'La ubicación aún no es suficientemente precisa (${pos.accuracy.toStringAsFixed(1)} m). Intenta nuevamente en unos segundos.',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        );
+        return;
+      }
 
       if (pos == null || !isInside) {
         if (mounted) {
@@ -975,66 +1163,99 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
 
     return Scaffold(
       // floatingActionButton: FloatingActionButton(
-      //   onPressed: _toggleTestLocation,
+      //   onPressed: () {
+      //     final maxAllowed = _accuracyMax ?? _maxAcceptedAccuracyFallback;
+
+      //     debugPrint("Accuracy actual: ${_position?.accuracy}");
+      //     debugPrint("Max permitido: $maxAllowed");
+      //   },
+      //   // onPressed: _toggleTestLocation,
       //   backgroundColor: _testOutside ? Colors.red : Colors.green,
       //   child: Icon(_testOutside ? Icons.location_off : Icons.location_on),
       // ),
       backgroundColor: const Color(0xFFF4F8FF),
+      appBar: AppBar(
+        centerTitle: false,
+        backgroundColor: Colors.transparent,
+        title: Text(
+          'SalleTime',
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w800,
+            color: const Color(0xFF0F172A),
+          ),
+        ),
+        actions: [
+          Container(
+            margin: EdgeInsets.only(right: 20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFE2E8F0)),
+            ),
+            child: IconButton(
+              onPressed: () async {
+                await AuthService.instance.signOut(context);
+              },
+              icon: Icon(Icons.output_sharp, color: const Color(0xFF2563EB)),
+            ),
+          ),
+        ],
+      ),
       body: Stack(
         children: [
           SafeArea(
             child: Column(
               children: [
-                Container(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Registro de marcación',
-                          style: theme.textTheme.headlineSmall?.copyWith(
-                            fontWeight: FontWeight.w800,
-                            color: const Color(0xFF0F172A),
-                          ),
-                        ),
-                      ),
-                      // Container(
-                      //   decoration: BoxDecoration(
-                      //     color: Colors.white,
-                      //     borderRadius: BorderRadius.circular(16),
-                      //     border: Border.all(color: const Color(0xFFE2E8F0)),
-                      //   ),
-                      //   child: IconButton(
-                      //     onPressed:
-                      //         _appBloqueada ? _mostrarDialogoBloqueo : null,
-                      //     icon: Icon(
-                      //       Icons.settings_outlined,
-                      //       color:
-                      //           _appBloqueada
-                      //               ? const Color(0xFF2563EB)
-                      //               : const Color(0xFF64748B),
-                      //     ),
-                      //   ),
-                      // ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: const Color(0xFFE2E8F0)),
-                        ),
-                        child: IconButton(
-                          onPressed: () async {
-                            await AuthService.instance.signOut(context);
-                          },
-                          icon: Icon(
-                            Icons.output_sharp,
-                            color: const Color(0xFF2563EB),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                // Container(
+                //   padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                //   child: Row(
+                //     children: [
+                //       Expanded(
+                //         child: Text(
+                //           'Registro de marcación',
+                //           style: theme.textTheme.headlineSmall?.copyWith(
+                //             fontWeight: FontWeight.w800,
+                //             color: const Color(0xFF0F172A),
+                //           ),
+                //         ),
+                //       ),
+                //       // Container(
+                //       //   decoration: BoxDecoration(
+                //       //     color: Colors.white,
+                //       //     borderRadius: BorderRadius.circular(16),
+                //       //     border: Border.all(color: const Color(0xFFE2E8F0)),
+                //       //   ),
+                //       //   child: IconButton(
+                //       //     onPressed:
+                //       //         _appBloqueada ? _mostrarDialogoBloqueo : null,
+                //       //     icon: Icon(
+                //       //       Icons.settings_outlined,
+                //       //       color:
+                //       //           _appBloqueada
+                //       //               ? const Color(0xFF2563EB)
+                //       //               : const Color(0xFF64748B),
+                //       //     ),
+                //       //   ),
+                //       // ),
+                //       Container(
+                //         decoration: BoxDecoration(
+                //           color: Colors.white,
+                //           borderRadius: BorderRadius.circular(16),
+                //           border: Border.all(color: const Color(0xFFE2E8F0)),
+                //         ),
+                //         child: IconButton(
+                //           onPressed: () async {
+                //             await AuthService.instance.signOut(context);
+                //           },
+                //           icon: Icon(
+                //             Icons.output_sharp,
+                //             color: const Color(0xFF2563EB),
+                //           ),
+                //         ),
+                //       ),
+                //     ],
+                //   ),
+                // ),
                 Expanded(
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
@@ -1048,6 +1269,75 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage> {
                           profileImage: _profileImage,
                           initials: _initialsFromName(_nombre),
                         ),
+                        const SizedBox(height: 18),
+
+                        // Container(
+                        //   height: 260,
+                        //   decoration: BoxDecoration(
+                        //     borderRadius: BorderRadius.circular(20),
+                        //     border: Border.all(color: const Color(0xFFE2E8F0)),
+                        //   ),
+                        //   clipBehavior: Clip.hardEdge,
+                        //   child: GoogleMap(
+                        //     initialCameraPosition: CameraPosition(
+                        //       target:
+                        //           _polygon.isNotEmpty
+                        //               ? _polygon.first
+                        //               : const LatLng(
+                        //                 -16.3989,
+                        //                 -71.5369,
+                        //               ), // fallback Arequipa
+                        //       zoom: 26,
+                        //     ),
+
+                        //     onMapCreated: (controller) async {
+                        //       _mapCtrl = controller;
+
+                        //       await Future.delayed(
+                        //         const Duration(milliseconds: 300),
+                        //       );
+
+                        //       await _fitMapToPolygon();
+
+                        //       if (_position != null) {
+                        //         _moveCameraSoft(_position!);
+                        //       }
+                        //     },
+
+                        //     myLocationEnabled: true,
+                        //     myLocationButtonEnabled: true,
+                        //     zoomControlsEnabled: false,
+
+                        //     polygons:
+                        //         _polygon.isEmpty
+                        //             ? {}
+                        //             : {
+                        //               Polygon(
+                        //                 polygonId: const PolygonId('geofence'),
+                        //                 points: _polygon,
+                        //                 strokeWidth: 3,
+                        //                 strokeColor: Colors.blue,
+                        //                 fillColor: Colors.blue.withOpacity(
+                        //                   0.15,
+                        //                 ),
+                        //               ),
+                        //             },
+
+                        //     markers: {
+                        //       if (_position != null)
+                        //         Marker(
+                        //           markerId: const MarkerId('user'),
+                        //           position: LatLng(
+                        //             _position!.latitude,
+                        //             _position!.longitude,
+                        //           ),
+                        //           infoWindow: const InfoWindow(
+                        //             title: 'Tu ubicación',
+                        //           ),
+                        //         ),
+                        //     },
+                        //   ),
+                        // ),
                         const SizedBox(height: 18),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 4),

@@ -1,12 +1,27 @@
-// lib/pages/root_page.dart
 import 'package:asistenciapersonal1/pages/login_page.dart';
 import 'package:asistenciapersonal1/pages/marcacion_asistencia_page.dart';
+import 'package:asistenciapersonal1/pages/privacy_consent_page.dart';
 import 'package:asistenciapersonal1/services/auth_service.dart';
+import 'package:asistenciapersonal1/services/privacy_consent_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-class RootPage extends StatelessWidget {
+class RootPage extends StatefulWidget {
   const RootPage({super.key});
+
+  @override
+  State<RootPage> createState() => _RootPageState();
+}
+
+class _RootPageState extends State<RootPage> {
+  int _consentRefreshKey = 0;
+
+  void _refreshConsentCheck() {
+    if (!mounted) return;
+    setState(() {
+      _consentRefreshKey++;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -27,12 +42,11 @@ class RootPage extends StatelessWidget {
           return const LoginPage();
         }
 
-        // Si hay usuario -> verificar DNI + dispositivo antes de mostrar el mapa
+        // Si hay usuario -> verificar DNI + dispositivo
         return FutureBuilder<bool>(
           future: AuthService.instance.verifyAccessForUser(context, user),
           builder: (context, snap) {
             if (snap.connectionState != ConnectionState.done) {
-              // Verificando acceso...
               return const Scaffold(
                 body: Center(child: CircularProgressIndicator()),
               );
@@ -40,14 +54,33 @@ class RootPage extends StatelessWidget {
 
             final allowed = snap.data ?? false;
 
-            if (allowed) {
-              // Dispositivo permitido -> pantalla de marcación
-              return const MarcacionAsistenciaPage();
-            } else {
-              // Acceso bloqueado (sin DNI o en otro dispositivo) ->
-              // Firebase ya hizo signOut, volvemos al login.
+            if (!allowed) {
               return const LoginPage();
             }
+
+            // Si está permitido -> verificar autorización
+            return FutureBuilder<bool>(
+              key: ValueKey(_consentRefreshKey),
+              future: PrivacyConsentService.instance.hasAcceptedConsent(user),
+              builder: (context, consentSnap) {
+                if (consentSnap.connectionState != ConnectionState.done) {
+                  return const Scaffold(
+                    body: Center(child: CircularProgressIndicator()),
+                  );
+                }
+
+                final accepted = consentSnap.data ?? false;
+
+                if (!accepted) {
+                  return PrivacyConsentPage(
+                    user: user,
+                    onAccepted: _refreshConsentCheck,
+                  );
+                }
+
+                return const MarcacionAsistenciaPage();
+              },
+            );
           },
         );
       },
