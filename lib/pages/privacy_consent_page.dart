@@ -1,3 +1,4 @@
+import 'package:asistenciapersonal1/services/auth_service.dart';
 import 'package:asistenciapersonal1/services/privacy_consent_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -67,7 +68,7 @@ Esta información será utilizada solo para fines institucionales y de control d
   }
 
   Future<void> _logout() async {
-    await FirebaseAuth.instance.signOut();
+    await AuthService.instance.signOut(context);
   }
 
   @override

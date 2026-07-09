@@ -4,6 +4,8 @@ import 'dart:math' as Math;
 import 'package:asistenciapersonal1/models/last_transaction.dart';
 import 'package:asistenciapersonal1/models/transaction_request.dart';
 import 'package:asistenciapersonal1/services/auth_service.dart';
+import 'package:asistenciapersonal1/services/api_config.dart';
+import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/transaction_api.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -72,7 +74,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _cargarInfoVersionYEscucharEstado();
-    _api = TransactionApi(baseUrl: 'https://apiasistencia.lasalle.edu.pe');
+    _api = TransactionApi(baseUrl: ApiConfig.baseUrl);
 
     _validarServiciosRequeridos();
     _servicesTimer = Timer.periodic(const Duration(seconds: 4), (_) {
@@ -1029,9 +1031,18 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
       await _showSuccessPopup();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al registrar la marcación: $e')),
-      );
+      debugPrint('Error técnico al registrar la marcación: $e');
+      final message =
+          e is AppException
+              ? e.userMessage
+              : const AppException(
+                code: 'MARK-001',
+                message:
+                    'No pudimos registrar tu marcación. Inténtalo nuevamente.',
+              ).userMessage;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
       if (mounted) {
         setState(() {

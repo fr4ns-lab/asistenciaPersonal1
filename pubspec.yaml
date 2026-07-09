@@ -37,6 +37,7 @@ dependencies:
   firebase_core: ^4.2.1
   flutter:
     sdk: flutter
+  flutter_secure_storage: ^9.2.4
   flutter_launcher_icons: ^0.14.4
   flutter_native_splash: ^2.4.6
   geolocator: ^14.0.2
