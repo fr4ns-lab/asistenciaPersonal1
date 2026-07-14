@@ -134,6 +134,39 @@ class AppErrors {
     );
   }
 
+  static AppException dashboardFailed(int statusCode, String responseBody) {
+    final detail = _apiDetail(responseBody);
+
+    if (statusCode == 401) return sessionExpired();
+    if (statusCode == 403) {
+      if (detail.toLowerCase().contains('emp_code') ||
+          detail.toLowerCase().contains('dni')) {
+        return AppException(
+          code: 'DASH-403-DNI',
+          message:
+              'Tu usuario aún no tiene DNI asociado para consultar asistencia. Comunícate con el administrador.',
+          technicalDetail: detail,
+        );
+      }
+      return AppException(
+        code: 'DASH-403',
+        message:
+            'Tu usuario no tiene permiso para ver el panel de asistencia. Comunícate con el administrador.',
+        technicalDetail: detail,
+      );
+    }
+    if (_isServerUnavailableStatus(statusCode)) {
+      return apiUnavailable(technicalDetail: detail);
+    }
+
+    return AppException(
+      code: 'DASH-$statusCode',
+      message:
+          'No pudimos cargar tu panel de asistencia. Inténtalo nuevamente.',
+      technicalDetail: detail,
+    );
+  }
+
   static bool _isServerUnavailableStatus(int statusCode) {
     return statusCode == 502 ||
         statusCode == 503 ||

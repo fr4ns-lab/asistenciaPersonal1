@@ -1,5 +1,5 @@
 import 'package:asistenciapersonal1/pages/login_page.dart';
-import 'package:asistenciapersonal1/pages/marcacion_asistencia_page.dart';
+import 'package:asistenciapersonal1/pages/main_tabs_page.dart';
 import 'package:asistenciapersonal1/pages/privacy_consent_page.dart';
 import 'package:asistenciapersonal1/services/auth_service.dart';
 import 'package:asistenciapersonal1/services/privacy_consent_service.dart';
@@ -138,7 +138,7 @@ class _RootPageState extends State<RootPage> {
                       );
                     }
 
-                    return const MarcacionAsistenciaPage();
+                    return const MainTabsPage();
                   },
                 );
               },

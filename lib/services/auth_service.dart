@@ -370,6 +370,7 @@ class AuthService {
         await _clearAllSessions();
         throw const FirebaseSessionException();
       }
+      debugPrint('FIREBASE_ID_TOKEN: $firebaseIdToken');
       _debugFirebaseTokenClaims(firebaseIdToken);
 
       final body = await _firebaseAuthRequestBody(

@@ -19,3 +19,6 @@ Estos códigos son para soporte interno. La app debe mostrar al usuario un mensa
 | MARK-403 | Tu usuario no tiene permiso para registrar asistencia. Comunícate con el administrador. | La API rechazó la marcación con 403. | Revisar permisos/estado del usuario en backend. |
 | MARK-{HTTP} | No pudimos registrar tu marcación. Inténtalo nuevamente. | La API devolvió un HTTP no exitoso al marcar. | Revisar status/body del backend para ese intento. |
 | LAST-{HTTP} | No pudimos consultar tu última marcación. Inténtalo nuevamente. | La API devolvió un HTTP no exitoso al consultar última marcación. | Revisar endpoint `/api/logs/ultimo-registro/{emp_code}`. |
+| DASH-403 | Tu usuario no tiene permiso para ver el panel de asistencia. Comunícate con el administrador. | La API rechazó `/api/dashboard/me` con 403. | Revisar permisos/estado del usuario en backend. |
+| DASH-RESP | No pudimos cargar tu panel de asistencia. Inténtalo nuevamente. | La respuesta de `/api/dashboard/me` no tuvo el formato esperado. | Verificar schema JSON del endpoint. |
+| DASH-{HTTP} | No pudimos cargar tu panel de asistencia. Inténtalo nuevamente. | La API devolvió un HTTP no exitoso al cargar dashboard. | Revisar endpoint `/api/dashboard/me?month=YYYY-MM`. |

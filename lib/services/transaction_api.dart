@@ -4,7 +4,6 @@ import 'package:asistenciapersonal1/models/last_transaction.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/api_client.dart';
 import 'package:asistenciapersonal1/services/auth_service.dart';
-import 'package:http/http.dart' as http;
 import '../models/transaction_request.dart';
 
 class TransactionApi {
@@ -28,11 +27,6 @@ class TransactionApi {
       headers: {'Content-Type': 'application/json'},
       body: bodyJson,
     );
-    // final resp = await http.post(
-    //   url,
-    //   headers: {'Content-Type': 'application/json'},
-    //   body: bodyJson,
-    // );
 
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw AppErrors.transactionFailed(resp.statusCode, resp.body);

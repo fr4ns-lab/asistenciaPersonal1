@@ -1,5 +1,7 @@
+import 'package:asistenciapersonal1/models/dashboard_response.dart';
 import 'package:asistenciapersonal1/services/api_client.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
+import 'package:asistenciapersonal1/services/dashboard_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -110,6 +112,125 @@ void main() {
 
       expect(error.code, 'AUTH-401');
       expect(error.userMessage, contains('Tu sesión venció'));
+    });
+  });
+
+  group('DashboardResponse', () {
+    test('parsea el contrato de /api/dashboard/me', () {
+      final dashboard = DashboardResponse.fromJson({
+        'employee': {
+          'emp_code': '70551254',
+          'name': 'Jhonny GALLEGOS',
+          'email': 'jgallegos@lasalle.edu.pe',
+        },
+        'period': {'from': '2026-07-01', 'to': '2026-07-31'},
+        'summary': {
+          'expected_working_days': 7,
+          'worked_days': 6,
+          'on_time_days': 5,
+          'late_days': 1,
+          'missing_days': 1,
+          'free_days': 2,
+          'on_time_percentage': 71.43,
+          'compliance_percentage': 85.71,
+          'attendance_level': {'key': 'buena', 'label': 'Asistencia buena'},
+          'worked_days_label': '6 días con marca de 7 días programados',
+          'missing_days_label': '1 día programado sin marca',
+        },
+        'comparison': {
+          'previous_period': {
+            'from': '2026-06-01',
+            'to': '2026-06-30',
+            'month': '2026-06',
+          },
+          'previous_summary': {},
+          'deltas': {
+            'worked_days': 1,
+            'on_time_days': 2,
+            'late_days': -1,
+            'missing_days': -1,
+            'on_time_percentage': 10.0,
+            'compliance_percentage': 12.5,
+          },
+          'improved': {
+            'late_days': true,
+            'missing_days': true,
+            'on_time_percentage': true,
+            'compliance_percentage': true,
+          },
+        },
+        'status_counts': {'puntual': 5, 'tarde': 1},
+        'daily': [
+          {
+            'date': '2026-07-09',
+            'schedule': 'Horario regular',
+            'expected_in': '07:30',
+            'expected_out': '15:30',
+            'first_punch': '07:22',
+            'last_punch': '12:25',
+            'punch_count': 7,
+            'status': 'puntual',
+          },
+        ],
+        'recent_checkins': [
+          {
+            'id': 123,
+            'punch_date': '2026-07-09',
+            'punch_time': '07:22',
+            'punch_state': '0',
+            'terminal_alias': 'APP',
+            'gps_location': 'Lima',
+            'latitude': -12.0,
+            'longitude': -77.0,
+          },
+        ],
+      });
+
+      expect(dashboard.employee.empCode, '70551254');
+      expect(dashboard.employee.email, 'jgallegos@lasalle.edu.pe');
+      expect(dashboard.summary.onTimePercentage, 71.43);
+      expect(dashboard.summary.attendanceLevel.key, 'buena');
+      expect(dashboard.comparison.deltas.compliancePercentage, 12.5);
+      expect(dashboard.comparison.improved.lateDays, isTrue);
+      expect(dashboard.statusCounts['puntual'], 5);
+      expect(dashboard.daily.single.status, 'puntual');
+      expect(dashboard.recentCheckins.single.terminalAlias, 'APP');
+      expect(dashboard.hasData, isTrue);
+    });
+  });
+
+  group('DashboardApiService', () {
+    test('consulta el periodo solicitado con el JWT interno', () async {
+      final client = ApiClient(
+        tokenProvider: ({required forceRefresh, rejectedToken}) async {
+          return 'jwt-interno';
+        },
+        httpClient: MockClient((request) async {
+          expect(request.url.path, '/api/dashboard/me');
+          expect(request.url.queryParameters['month'], '2026-07');
+          expect(request.headers['Authorization'], 'Bearer jwt-interno');
+          return http.Response('''{
+              "employee": {},
+              "period": {},
+              "summary": {},
+              "comparison": {},
+              "status_counts": {},
+              "daily": [],
+              "recent_checkins": []
+            }''', 200);
+        }),
+      );
+      final service = DashboardApiService(
+        baseUrl: 'https://api.test',
+        client: client,
+      );
+
+      final dashboard = await service.getMyDashboard(
+        month: DateTime(2026, 7, 14),
+      );
+
+      expect(dashboard.hasData, isFalse);
+      client.close();
     });
   });
 }
