@@ -44,7 +44,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _refresh() async {
-    setState(() => _future = _load());
+    setState(() {
+      _future = _load();
+    });
     await _future;
   }
 
@@ -233,6 +235,8 @@ class _DashboardContent extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _EmployeePeriodHeader(employee: data.employee, period: data.period),
+        const SizedBox(height: 12),
         _PanelCard(
           child: Row(
             children: [
@@ -240,7 +244,7 @@ class _DashboardContent extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const _CardLabel('CUMPLIMIENTO'),
+                    const _CardLabel('ASISTENCIA DEL PERIODO'),
                     const SizedBox(height: 8),
                     Text(
                       '${_formatNumber(summary.compliancePercentage)}%',
@@ -261,15 +265,21 @@ class _DashboardContent extends StatelessWidget {
                   ],
                 ),
               ),
-              SizedBox(
-                width: 72,
-                height: 72,
-                child: CircularProgressIndicator(
-                  value: (summary.compliancePercentage / 100).clamp(0, 1),
-                  strokeWidth: 8,
-                  backgroundColor: const Color(0xFFE2E8F0),
-                  valueColor: AlwaysStoppedAnimation<Color>(levelColor),
-                ),
+              Stack(
+                alignment: Alignment.center,
+                children: [
+                  SizedBox(
+                    width: 78,
+                    height: 78,
+                    child: CircularProgressIndicator(
+                      value: (summary.compliancePercentage / 100).clamp(0, 1),
+                      strokeWidth: 8,
+                      backgroundColor: const Color(0xFFE2E8F0),
+                      valueColor: AlwaysStoppedAnimation<Color>(levelColor),
+                    ),
+                  ),
+                  Icon(Icons.insights_rounded, color: levelColor, size: 26),
+                ],
               ),
             ],
           ),
@@ -281,10 +291,18 @@ class _DashboardContent extends StatelessWidget {
           child: _PanelCard(
             child: Row(
               children: [
-                const Icon(
-                  Icons.calendar_month_rounded,
-                  color: Color(0xFF2563EB),
-                  size: 30,
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEFF6FF),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.calendar_month_rounded,
+                    color: Color(0xFF2563EB),
+                    size: 24,
+                  ),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -303,6 +321,15 @@ class _DashboardContent extends StatelessWidget {
                           fontWeight: FontWeight.w700,
                         ),
                       ),
+                      const SizedBox(height: 2),
+                      const Text(
+                        'Ver detalle diario',
+                        style: TextStyle(
+                          color: Color(0xFF2563EB),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -315,51 +342,72 @@ class _DashboardContent extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        GridView.count(
-          crossAxisCount: 2,
-          childAspectRatio: 1.45,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          children: [
-            _MetricCard(
-              label: 'PUNTUALIDAD',
-              value: '${_formatNumber(summary.onTimePercentage)}%',
-              icon: Icons.verified_rounded,
-              color: const Color(0xFF16A34A),
-            ),
-            _MetricCard(
-              label: 'TARDANZAS',
-              value: '${summary.lateDays}',
-              icon: Icons.schedule_rounded,
-              color: const Color(0xFFDC2626),
-              comparison: _comparisonText(
-                summary: data.comparison,
-                value: data.comparison.deltas.lateDays,
-                improved: data.comparison.improved.lateDays,
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _MetricCard(
+                  label: 'PUNTUALIDAD',
+                  value: '${_formatNumber(summary.onTimePercentage)}%',
+                  icon: Icons.verified_rounded,
+                  color: const Color(0xFF16A34A),
+                  comparison: _comparisonText(
+                    summary: data.comparison,
+                    value: data.comparison.deltas.onTimePercentage,
+                    improved: data.comparison.improved.onTimePercentage,
+                    suffix: '%',
+                  ),
+                ),
               ),
-            ),
-            _MetricCard(
-              label: 'SIN MARCA',
-              value: '${summary.missingDays}',
-              icon: Icons.event_busy_rounded,
-              color: const Color(0xFFDC2626),
-              comparison: _comparisonText(
-                summary: data.comparison,
-                value: data.comparison.deltas.missingDays,
-                improved: data.comparison.improved.missingDays,
+              const SizedBox(width: 12),
+              Expanded(
+                child: _MetricCard(
+                  label: 'TARDANZAS',
+                  value: '${summary.lateDays}',
+                  icon: Icons.schedule_rounded,
+                  color: const Color(0xFFDC2626),
+                  comparison: _comparisonText(
+                    summary: data.comparison,
+                    value: data.comparison.deltas.lateDays,
+                    improved: data.comparison.improved.lateDays,
+                  ),
+                ),
               ),
-            ),
-            _MetricCard(
-              label: 'DÍAS LIBRES',
-              value: '${summary.freeDays}',
-              icon: Icons.beach_access_rounded,
-              color: const Color(0xFF64748B),
-            ),
-          ],
+            ],
+          ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 12),
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _MetricCard(
+                  label: 'SIN MARCA',
+                  value: '${summary.missingDays}',
+                  icon: Icons.event_busy_rounded,
+                  color: const Color(0xFFDC2626),
+                  comparison: _comparisonText(
+                    summary: data.comparison,
+                    value: data.comparison.deltas.missingDays,
+                    improved: data.comparison.improved.missingDays,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _MetricCard(
+                  label: 'DÍAS LIBRES',
+                  value: '${summary.freeDays}',
+                  icon: Icons.beach_access_rounded,
+                  color: const Color(0xFF64748B),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
         _ComparisonCard(comparison: data.comparison),
         const SizedBox(height: 24),
         const Text(
@@ -377,6 +425,64 @@ class _DashboardContent extends StatelessWidget {
           )
         else
           ...recent.map((item) => _RecentCheckinCard(item: item)),
+      ],
+    );
+  }
+}
+
+class _EmployeePeriodHeader extends StatelessWidget {
+  const _EmployeePeriodHeader({required this.employee, required this.period});
+
+  final DashboardEmployee employee;
+  final DashboardPeriod period;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = employee.name.trim();
+    final code = employee.empCode.trim();
+    final periodText =
+        period.from.isEmpty || period.to.isEmpty
+            ? 'Periodo seleccionado'
+            : '${period.from} al ${period.to}';
+
+    return Row(
+      children: [
+        Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: const Color(0xFFEAF7EE),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(
+            Icons.person_outline_rounded,
+            color: Color(0xFF15803D),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                name.isEmpty ? 'Mi asistencia' : name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                code.isEmpty ? periodText : 'Código $code · $periodText',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -466,10 +572,18 @@ class _MetricCard extends StatelessWidget {
           Row(
             children: [
               Expanded(child: _CardLabel(label)),
-              Icon(icon, color: color, size: 20),
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, color: color, size: 18),
+              ),
             ],
           ),
-          const Spacer(),
+          const SizedBox(height: 8),
           Text(
             value,
             style: const TextStyle(
@@ -493,6 +607,8 @@ class _MetricCard extends StatelessWidget {
                 fontWeight: FontWeight.w600,
               ),
             ),
+          ] else ...[
+            const SizedBox(height: 14),
           ],
         ],
       ),
@@ -513,23 +629,27 @@ class _ComparisonCard extends StatelessWidget {
     final rows = [
       _ComparisonRowData(
         label: 'Cumplimiento',
+        icon: Icons.workspace_premium_rounded,
         value: comparison.deltas.compliancePercentage,
         suffix: '%',
         improved: comparison.improved.compliancePercentage,
       ),
       _ComparisonRowData(
         label: 'Puntualidad',
+        icon: Icons.verified_rounded,
         value: comparison.deltas.onTimePercentage,
         suffix: '%',
         improved: comparison.improved.onTimePercentage,
       ),
       _ComparisonRowData(
         label: 'Tardanzas',
+        icon: Icons.schedule_rounded,
         value: comparison.deltas.lateDays.toDouble(),
         improved: comparison.improved.lateDays,
       ),
       _ComparisonRowData(
         label: 'Sin marca',
+        icon: Icons.event_busy_rounded,
         value: comparison.deltas.missingDays.toDouble(),
         improved: comparison.improved.missingDays,
       ),
@@ -539,46 +659,126 @@ class _ComparisonCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _CardLabel('COMPARACIÓN CON MES ANTERIOR'),
-          const SizedBox(height: 4),
-          Text(
-            previous.month,
-            style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          ...rows.map(
-            (row) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  Expanded(child: Text(row.label)),
-                  Icon(
-                    row.improved
-                        ? Icons.trending_up_rounded
-                        : Icons.remove_rounded,
-                    color:
-                        row.improved
-                            ? const Color(0xFF16A34A)
-                            : const Color(0xFF64748B),
-                    size: 18,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '${_signedNumber(row.value)}${row.suffix}',
-                    style: TextStyle(
-                      color:
-                          row.improved
-                              ? const Color(0xFF16A34A)
-                              : const Color(0xFF475569),
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.compare_arrows_rounded,
+                  color: Color(0xFF2563EB),
+                  size: 21,
+                ),
               ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Comparación mensual',
+                      style: TextStyle(
+                        color: Color(0xFF0F172A),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Respecto a ${previous.month}',
+                      style: const TextStyle(
+                        color: Color(0xFF64748B),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          const Divider(height: 1, color: Color(0xFFE2E8F0)),
+          ...List.generate(
+            rows.length,
+            (index) => _ComparisonMetricRow(
+              row: rows[index],
+              showDivider: index < rows.length - 1,
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ComparisonMetricRow extends StatelessWidget {
+  const _ComparisonMetricRow({required this.row, required this.showDivider});
+
+  final _ComparisonRowData row;
+  final bool showDivider;
+
+  @override
+  Widget build(BuildContext context) {
+    final isNeutral = row.value == 0;
+    final color =
+        isNeutral
+            ? const Color(0xFF64748B)
+            : row.improved
+            ? const Color(0xFF16A34A)
+            : const Color(0xFFDC2626);
+    final status =
+        isNeutral
+            ? 'Sin variación'
+            : row.improved
+            ? 'Mejoró'
+            : 'Requiere atención';
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(row.icon, color: color, size: 18),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      row.label,
+                      style: const TextStyle(
+                        color: Color(0xFF334155),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(status, style: TextStyle(color: color, fontSize: 11)),
+                  ],
+                ),
+              ),
+              _DeltaBadge(
+                value: row.value,
+                suffix: row.suffix,
+                improved: row.improved,
+              ),
+            ],
+          ),
+        ),
+        if (showDivider) const Divider(height: 1, color: Color(0xFFE2E8F0)),
+      ],
     );
   }
 }
@@ -913,15 +1113,69 @@ class _ComparisonText {
 class _ComparisonRowData {
   const _ComparisonRowData({
     required this.label,
+    required this.icon,
     required this.value,
     required this.improved,
     this.suffix = '',
   });
 
   final String label;
+  final IconData icon;
   final double value;
   final bool improved;
   final String suffix;
+}
+
+class _DeltaBadge extends StatelessWidget {
+  const _DeltaBadge({
+    required this.value,
+    required this.suffix,
+    required this.improved,
+  });
+
+  final double value;
+  final String suffix;
+  final bool improved;
+
+  @override
+  Widget build(BuildContext context) {
+    final isNeutral = value == 0;
+    final color =
+        isNeutral
+            ? const Color(0xFF64748B)
+            : improved
+            ? const Color(0xFF16A34A)
+            : const Color(0xFFDC2626);
+    final icon =
+        isNeutral
+            ? Icons.remove_rounded
+            : improved
+            ? Icons.trending_up_rounded
+            : Icons.trending_down_rounded;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 16),
+          const SizedBox(width: 4),
+          Text(
+            '${_signedNumber(value)}$suffix',
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _StatusPresentation {
@@ -980,12 +1234,13 @@ String _displayTime(String value) => value.isEmpty ? 'Sin marca' : value;
 
 _ComparisonText? _comparisonText({
   required DashboardComparison summary,
-  required int value,
+  required num value,
   required bool improved,
+  String suffix = '',
 }) {
   if (summary.previousPeriod == null) return null;
   return _ComparisonText(
-    text: '${value > 0 ? '+' : ''}$value vs. anterior',
+    text: '${_signedNumber(value.toDouble())}$suffix vs. anterior',
     improved: improved,
   );
 }

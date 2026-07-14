@@ -4,7 +4,6 @@ import 'package:asistenciapersonal1/models/dashboard_response.dart';
 import 'package:asistenciapersonal1/services/api_client.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/auth_service.dart';
-import 'package:logger/logger.dart';
 
 class DashboardApiService {
   DashboardApiService({required this.baseUrl, ApiClient? client})
@@ -37,8 +36,6 @@ class DashboardApiService {
       }
 
       final data = jsonDecode(response.body);
-      Logger logger = Logger();
-      logger.e('La respuesta del panel no es un objeto JSON: ${response.body}');
       if (data is! Map<String, dynamic>) {
         throw const AppException(
           code: 'DASH-RESP',
