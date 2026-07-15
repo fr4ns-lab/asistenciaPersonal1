@@ -75,9 +75,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _scrollToCurrentMonth() {
     if (_monthSelectorPositioned || !_monthScrollController.hasClients) return;
     _monthSelectorPositioned = true;
-    _monthScrollController.jumpTo(
-      _monthScrollController.position.maxScrollExtent,
-    );
+    _monthScrollController.jumpTo(0);
   }
 
   @override
@@ -1263,7 +1261,7 @@ List<DateTime> _buildAvailableMonths(DateTime now) {
     months.add(cursor);
     cursor = DateTime(cursor.year, cursor.month + 1);
   }
-  return months;
+  return months.reversed.toList();
 }
 
 bool _sameMonth(DateTime left, DateTime right) {
