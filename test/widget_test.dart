@@ -2,6 +2,7 @@ import 'package:asistenciapersonal1/models/dashboard_response.dart';
 import 'package:asistenciapersonal1/services/api_client.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/dashboard_service.dart';
+import 'package:asistenciapersonal1/services/dashboard_refresh_notifier.dart';
 import 'package:asistenciapersonal1/utils/lima_time.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -249,5 +250,16 @@ void main() {
       expect(date.hour, 7);
       expect(date.minute, 31);
     });
+  });
+
+  test('notifica al dashboard después de una marcación confirmada', () {
+    var notifications = 0;
+    void listener() => notifications++;
+
+    DashboardRefreshNotifier.instance.addListener(listener);
+    DashboardRefreshNotifier.instance.notifyCheckInRegistered();
+    DashboardRefreshNotifier.instance.removeListener(listener);
+
+    expect(notifications, 1);
   });
 }

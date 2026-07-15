@@ -8,6 +8,7 @@ import 'package:asistenciapersonal1/services/api_config.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/transaction_api.dart';
 import 'package:asistenciapersonal1/utils/lima_time.dart';
+import 'package:asistenciapersonal1/services/dashboard_refresh_notifier.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -1102,6 +1103,8 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
       );
 
       await _refreshLastMark();
+
+      DashboardRefreshNotifier.instance.notifyCheckInRegistered();
 
       if (!mounted) return;
 

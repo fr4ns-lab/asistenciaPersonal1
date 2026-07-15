@@ -2,6 +2,7 @@ import 'package:asistenciapersonal1/models/dashboard_response.dart';
 import 'package:asistenciapersonal1/services/api_config.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/dashboard_service.dart';
+import 'package:asistenciapersonal1/services/dashboard_refresh_notifier.dart';
 import 'package:flutter/material.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -28,6 +29,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _monthScrollController = ScrollController();
     _service = DashboardApiService(baseUrl: ApiConfig.baseUrl);
     _future = _load();
+    DashboardRefreshNotifier.instance.addListener(_refreshAfterCheckIn);
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _scrollToCurrentMonth(),
     );
@@ -35,6 +37,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
+    DashboardRefreshNotifier.instance.removeListener(_refreshAfterCheckIn);
     _monthScrollController.dispose();
     super.dispose();
   }
@@ -48,6 +51,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _future = _load();
     });
     await _future;
+  }
+
+  void _refreshAfterCheckIn() {
+    final now = DateTime.now();
+    final isCurrentMonth =
+        _selectedMonth.year == now.year && _selectedMonth.month == now.month;
+    if (!mounted || !isCurrentMonth) return;
+
+    setState(() {
+      _future = _load();
+    });
   }
 
   void _selectMonth(DateTime month) {
@@ -132,7 +146,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 else
                   _DashboardContent(
                     data: snapshot.data!,
-                    onOpenDetail: () => _showAttendanceDetail(snapshot.data!),
+                    onOpenDetail:
+                        ({required title, statuses}) => _showAttendanceDetail(
+                          snapshot.data!,
+                          title: title,
+                          statuses: statuses,
+                        ),
                   ),
               ],
             ),
@@ -142,7 +161,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  void _showAttendanceDetail(DashboardResponse data) {
+  void _showAttendanceDetail(
+    DashboardResponse data, {
+    required String title,
+    Set<String>? statuses,
+  }) {
+    final daily =
+        statuses == null
+            ? data.daily
+            : data.daily
+                .where(
+                  (item) => statuses.contains(item.status.trim().toLowerCase()),
+                )
+                .toList();
+
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -172,10 +204,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   const SizedBox(height: 14),
                   Row(
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Text(
-                          'Detalle de asistencia',
-                          style: TextStyle(
+                          title,
+                          style: const TextStyle(
                             color: Color(0xFF0F172A),
                             fontSize: 20,
                             fontWeight: FontWeight.w800,
@@ -192,22 +224,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   const SizedBox(height: 8),
                   Expanded(
                     child:
-                        data.daily.isEmpty
+                        daily.isEmpty
                             ? const Center(
                               child: Text(
-                                'No hay detalle diario para este periodo.',
+                                'No hay registros para esta categoría en este periodo.',
                                 textAlign: TextAlign.center,
                               ),
                             )
                             : ListView.separated(
                               controller: controller,
-                              itemCount: data.daily.length,
+                              itemCount: daily.length,
                               separatorBuilder:
                                   (_, _) => const SizedBox(height: 10),
                               itemBuilder:
-                                  (_, index) => _DailyAttendanceCard(
-                                    item: data.daily[index],
-                                  ),
+                                  (_, index) =>
+                                      _DailyAttendanceCard(item: daily[index]),
                             ),
                   ),
                 ],
@@ -224,7 +255,8 @@ class _DashboardContent extends StatelessWidget {
   const _DashboardContent({required this.data, required this.onOpenDetail});
 
   final DashboardResponse data;
-  final VoidCallback onOpenDetail;
+  final void Function({required String title, Set<String>? statuses})
+  onOpenDetail;
 
   @override
   Widget build(BuildContext context) {
@@ -286,7 +318,7 @@ class _DashboardContent extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         InkWell(
-          onTap: onOpenDetail,
+          onTap: () => onOpenDetail(title: 'Detalle de asistencia'),
           borderRadius: BorderRadius.circular(8),
           child: _PanelCard(
             child: Row(
@@ -352,6 +384,11 @@ class _DashboardContent extends StatelessWidget {
                   value: '${_formatNumber(summary.onTimePercentage)}%',
                   icon: Icons.verified_rounded,
                   color: const Color(0xFF16A34A),
+                  onTap:
+                      () => onOpenDetail(
+                        title: 'Detalle de puntualidad',
+                        statuses: const {'puntual'},
+                      ),
                   comparison: _comparisonText(
                     summary: data.comparison,
                     value: data.comparison.deltas.onTimePercentage,
@@ -367,6 +404,11 @@ class _DashboardContent extends StatelessWidget {
                   value: '${summary.lateDays}',
                   icon: Icons.schedule_rounded,
                   color: const Color(0xFFDC2626),
+                  onTap:
+                      () => onOpenDetail(
+                        title: 'Detalle de tardanzas',
+                        statuses: const {'tarde'},
+                      ),
                   comparison: _comparisonText(
                     summary: data.comparison,
                     value: data.comparison.deltas.lateDays,
@@ -388,6 +430,11 @@ class _DashboardContent extends StatelessWidget {
                   value: '${summary.missingDays}',
                   icon: Icons.event_busy_rounded,
                   color: const Color(0xFFDC2626),
+                  onTap:
+                      () => onOpenDetail(
+                        title: 'Detalle de días sin marca',
+                        statuses: const {'sin_marca'},
+                      ),
                   comparison: _comparisonText(
                     summary: data.comparison,
                     value: data.comparison.deltas.missingDays,
@@ -402,6 +449,11 @@ class _DashboardContent extends StatelessWidget {
                   value: '${summary.freeDays}',
                   icon: Icons.beach_access_rounded,
                   color: const Color(0xFF64748B),
+                  onTap:
+                      () => onOpenDetail(
+                        title: 'Detalle de días libres',
+                        statuses: const {'dia_libre'},
+                      ),
                 ),
               ),
             ],
@@ -554,6 +606,7 @@ class _MetricCard extends StatelessWidget {
     required this.icon,
     required this.color,
     this.comparison,
+    this.onTap,
   });
 
   final String label;
@@ -561,10 +614,11 @@ class _MetricCard extends StatelessWidget {
   final IconData icon;
   final Color color;
   final _ComparisonText? comparison;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return _PanelCard(
+    final card = _PanelCard(
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -611,6 +665,20 @@ class _MetricCard extends StatelessWidget {
             const SizedBox(height: 14),
           ],
         ],
+      ),
+    );
+
+    if (onTap == null) return card;
+    return Semantics(
+      button: true,
+      label: 'Ver $label',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: card,
+        ),
       ),
     );
   }
@@ -839,6 +907,10 @@ class _DailyAttendanceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = _statusPresentation(item.status);
+    final hasSinglePunch =
+        item.punchCount <= 1 || item.firstPunch == item.lastPunch;
+    final entry = _displayRecordedTime(item.firstPunch);
+    final exit = hasSinglePunch ? '-' : _displayRecordedTime(item.lastPunch);
     return _PanelCard(
       padding: EdgeInsets.zero,
       child: Container(
@@ -877,11 +949,8 @@ class _DailyAttendanceCard extends StatelessWidget {
               value:
                   '${_displayTime(item.expectedIn)} - ${_displayTime(item.expectedOut)}',
             ),
-            _DetailLine(
-              label: 'Marcaciones',
-              value:
-                  '${_displayTime(item.firstPunch)} - ${_displayTime(item.lastPunch)}',
-            ),
+            _DetailLine(label: 'Entrada registrada', value: entry),
+            _DetailLine(label: 'Salida registrada', value: exit),
             _DetailLine(label: 'Cantidad', value: '${item.punchCount}'),
           ],
         ),
@@ -1231,6 +1300,8 @@ String _signedNumber(double value) {
 }
 
 String _displayTime(String value) => value.isEmpty ? 'Sin marca' : value;
+
+String _displayRecordedTime(String value) => value.isEmpty ? '-' : value;
 
 _ComparisonText? _comparisonText({
   required DashboardComparison summary,
