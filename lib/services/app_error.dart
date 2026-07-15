@@ -80,7 +80,7 @@ class AppErrors {
     return AppException(
       code: 'API-503',
       message:
-          'No pudimos conectar con el servidor de asistencia. Inténtalo nuevamente en unos minutos.',
+          'No pudimos conectar con el servidor de asistencia. Inténtalo nuevamente en unos minutos. O diríjase a un marcador de asistencia físico si es urgente.',
       technicalDetail: technicalDetail,
     );
   }

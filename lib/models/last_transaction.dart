@@ -4,6 +4,8 @@
 
 import 'dart:convert';
 
+import 'package:asistenciapersonal1/utils/lima_time.dart';
+
 LastTransaction lastTransactionFromJson(String str) =>
     LastTransaction.fromJson(json.decode(str));
 
@@ -32,7 +34,7 @@ class Data {
   factory Data.fromJson(Map<String, dynamic> json) => Data(
     id: json["id"],
     empCode: json["emp_code"],
-    punchTime: DateTime.parse(json['punch_time']).toLocal(),
+    punchTime: LimaTime.parseApiTimestamp(json['punch_time'].toString()),
   );
 
   Map<String, dynamic> toJson() => {

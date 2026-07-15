@@ -82,7 +82,7 @@ class ProfilePage extends StatelessWidget {
                 ListTile(
                   leading: const Icon(Icons.verified_user_rounded),
                   title: const Text('Sesión protegida'),
-                  subtitle: const Text('Google, Firebase y token interno API'),
+                  // subtitle: const Text('Google, Firebase y token interno API'),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 18,
                     vertical: 6,

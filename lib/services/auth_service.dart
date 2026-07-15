@@ -8,6 +8,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -362,91 +363,214 @@ class AuthService {
 
   Future<String> _renewApiToken({required bool forceFirebaseRefresh}) async {
     final user = _auth.currentUser;
-    if (user == null) throw const FirebaseSessionException();
+
+    if (user == null) {
+      await _tokenStorage.clearAccessToken();
+      throw const FirebaseSessionException();
+    }
 
     try {
-      final firebaseIdToken = await user.getIdToken(forceFirebaseRefresh);
-      if (firebaseIdToken == null || firebaseIdToken.isEmpty) {
+      /*
+     * Obtiene el ID Token emitido por Firebase.
+     *
+     * forceFirebaseRefresh:
+     * - true: obliga a Firebase a generar/actualizar el token.
+     * - false: puede reutilizar un token vigente.
+     */
+      final rawFirebaseIdToken = await user.getIdToken(forceFirebaseRefresh);
+
+      if (rawFirebaseIdToken == null || rawFirebaseIdToken.trim().isEmpty) {
         await _clearAllSessions();
         throw const FirebaseSessionException();
       }
-      debugPrint('FIREBASE_ID_TOKEN: $firebaseIdToken');
-      _debugFirebaseTokenClaims(firebaseIdToken);
 
+      final firebaseIdToken = rawFirebaseIdToken.trim();
+
+      /*
+     * Solo durante desarrollo:
+     * copia el token completo al portapapeles para usarlo en Postman.
+     */
+      if (kDebugMode) {
+        try {
+          await Clipboard.setData(ClipboardData(text: firebaseIdToken));
+
+          debugPrint('==========================================');
+          debugPrint('FIREBASE ID TOKEN COPIADO AL PORTAPAPELES');
+          debugPrint('Longitud: ${firebaseIdToken.length}');
+          debugPrint('Partes JWT: ${firebaseIdToken.split('.').length}');
+          debugPrint('==========================================');
+        } catch (e) {
+          debugPrint('No se pudo copiar el Firebase ID Token: $e');
+        }
+
+        /*
+       * Muestra aud, iss, email y exp.
+       * No imprime nuevamente el token completo.
+       */
+        _debugFirebaseTokenClaims(firebaseIdToken);
+      }
+
+      /*
+     * Construye el cuerpo:
+     * {
+     *   "id_token": "...",
+     *   "emp_code": "..."
+     * }
+     */
       final body = await _firebaseAuthRequestBody(
         user: user,
         firebaseIdToken: firebaseIdToken,
       );
 
+      if (kDebugMode) {
+        debugPrint(
+          'Enviando autenticación Firebase a: '
+          '${ApiConfig.baseUrl}/api/auth/firebase',
+        );
+      }
+
       final response = await _apiHttpClient.post(
         Uri.parse('${ApiConfig.baseUrl}/api/auth/firebase'),
-        headers: const {'Content-Type': 'application/json'},
+        headers: const {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
         body: jsonEncode(body),
       );
 
+      if (kDebugMode) {
+        debugPrint('Firebase Auth API status: ${response.statusCode}');
+        debugPrint('Firebase Auth API response: ${response.body}');
+      }
+
+      /*
+     * Token Firebase rechazado por Django.
+     */
       if (response.statusCode == 401) {
         await _tokenStorage.clearAccessToken();
+
         final error = AppErrors.firebaseTokenRejected(response.body);
+
         debugPrint(error.toString());
         throw ApiAuthenticationException(error);
       }
 
+      /*
+     * Usuario autenticado, pero sin autorización.
+     * Ejemplo: DNI incorrecto o usuario no permitido.
+     */
       if (response.statusCode == 403) {
         await _tokenStorage.clearAccessToken();
+
         final error = AppErrors.authForbidden(response.body);
+
         debugPrint(error.toString());
         throw ApiUnauthorizedException(error);
       }
 
+      /*
+     * Cloudflare, proxy o servidor no disponible.
+     */
       if (_isServerUnavailableStatus(response.statusCode)) {
         final error = AppErrors.apiUnavailable(
           technicalDetail: 'HTTP ${response.statusCode}: ${response.body}',
         );
+
         debugPrint(error.toString());
         throw const ApiOfflineException();
       }
 
+      /*
+     * Cualquier otro estado HTTP inesperado.
+     */
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final error = AppErrors.apiAuthUnexpected(
           response.statusCode,
           response.body,
         );
+
         debugPrint(error.toString());
         throw ApiAuthenticationException(error);
       }
 
-      final data = jsonDecode(response.body);
-      if (data is! Map<String, dynamic>) {
+      /*
+     * Convierte la respuesta de Django.
+     */
+      final dynamic decodedResponse;
+
+      try {
+        decodedResponse = jsonDecode(response.body);
+      } on FormatException catch (e) {
+        throw ApiAuthenticationException(
+          AppException(
+            code: 'AUTH-JSON',
+            message:
+                'El servidor devolvió una respuesta inválida. '
+                'Inténtalo nuevamente.',
+            technicalDetail:
+                'La respuesta no es JSON válido: $e. '
+                'Body: ${response.body}',
+          ),
+        );
+      }
+
+      if (decodedResponse is! Map<String, dynamic>) {
         throw const ApiAuthenticationException(
           AppException(
             code: 'AUTH-RESP',
             message:
-                'No pudimos iniciar tu sesión en el servidor de asistencia. Inténtalo nuevamente.',
-            technicalDetail: 'La respuesta de autenticación no es un objeto.',
+                'No pudimos iniciar tu sesión en el servidor '
+                'de asistencia. Inténtalo nuevamente.',
+            technicalDetail:
+                'La respuesta de autenticación no es un objeto JSON.',
           ),
         );
       }
 
-      final accessToken = data['access_token'];
-      if (accessToken is! String || accessToken.isEmpty) {
+      /*
+     * Obtiene el access_token propio de tu API Django.
+     */
+      final accessTokenValue = decodedResponse['access_token'];
+
+      if (accessTokenValue is! String || accessTokenValue.trim().isEmpty) {
         throw const ApiAuthenticationException(
           AppException(
             code: 'AUTH-NO-TOKEN',
             message:
-                'No pudimos iniciar tu sesión en el servidor de asistencia. Inténtalo nuevamente.',
-            technicalDetail: 'La API no devolvió access_token.',
+                'No pudimos iniciar tu sesión en el servidor '
+                'de asistencia. Inténtalo nuevamente.',
+            technicalDetail: 'La API no devolvió un access_token válido.',
           ),
         );
       }
 
+      final accessToken = accessTokenValue.trim();
+
+      /*
+     * Guarda el token de sesión emitido por Django.
+     */
       await _tokenStorage.saveAccessToken(accessToken);
+
+      if (kDebugMode) {
+        debugPrint('Sesión de API creada y access_token guardado.');
+      }
+
       return accessToken;
-    } on FirebaseAuthException {
+    } on FirebaseAuthException catch (e) {
+      debugPrint(
+        'FirebaseAuthException renovando token: '
+        '${e.code} - ${e.message}',
+      );
+
       await _clearAllSessions();
       throw const FirebaseSessionException();
-    } on SocketException {
+    } on SocketException catch (e) {
+      debugPrint('SocketException autenticando con la API: $e');
+
       throw const ApiOfflineException();
-    } on http.ClientException {
+    } on http.ClientException catch (e) {
+      debugPrint('ClientException autenticando con la API: $e');
+
       throw const ApiOfflineException();
     }
   }

@@ -2,6 +2,7 @@ import 'package:asistenciapersonal1/models/dashboard_response.dart';
 import 'package:asistenciapersonal1/services/api_client.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/dashboard_service.dart';
+import 'package:asistenciapersonal1/utils/lima_time.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -231,6 +232,22 @@ void main() {
 
       expect(dashboard.hasData, isFalse);
       client.close();
+    });
+  });
+
+  group('LimaTime', () {
+    test('convierte un timestamp UTC del API a hora Lima', () {
+      final date = LimaTime.parseApiTimestamp('2026-07-15T12:31:00Z');
+
+      expect(date.hour, 7);
+      expect(date.minute, 31);
+    });
+
+    test('trata timestamps API sin zona explícita como UTC', () {
+      final date = LimaTime.parseApiTimestamp('2026-07-15T12:31:00');
+
+      expect(date.hour, 7);
+      expect(date.minute, 31);
     });
   });
 }

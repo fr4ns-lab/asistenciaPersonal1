@@ -7,6 +7,7 @@ import 'package:asistenciapersonal1/services/auth_service.dart';
 import 'package:asistenciapersonal1/services/api_config.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/transaction_api.dart';
+import 'package:asistenciapersonal1/utils/lima_time.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -50,7 +51,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
   DateTime? _lastMarkTime;
 
   Timer? _clockTimer;
-  DateTime _now = DateTime.now();
+  DateTime _now = LimaTime.now();
 
   bool _appBloqueada = false;
   String _mensajeBloqueo = '';
@@ -318,6 +319,123 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     );
   }
 
+  Future<void> _showMarkErrorPopup(String message) async {
+    if (!mounted) return;
+
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'markError',
+      barrierColor: Colors.black.withValues(alpha: 0.50),
+      transitionDuration: const Duration(milliseconds: 260),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return SafeArea(
+          child: Center(
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.86,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 28,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFB91C1C),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x55000000),
+                      blurRadius: 24,
+                      offset: Offset(0, 12),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 96,
+                      height: 96,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.14),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.32),
+                          width: 2,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.error_outline_rounded,
+                        size: 62,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    const Text(
+                      'No se pudo registrar',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 27,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      message,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context, rootNavigator: true).pop();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: const Color(0xFFB91C1C),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        icon: const Icon(Icons.close_rounded),
+                        label: const Text(
+                          'Entendido',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutBack,
+        );
+        return Transform.scale(
+          scale: curved.value,
+          child: Opacity(opacity: animation.value, child: child),
+        );
+      },
+    );
+  }
+
   Future<void> _notifyPerimeterChange(bool inside) async {
     try {
       if (inside) {
@@ -424,8 +542,8 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
 
   Future<void> _syncTimeFromNTP({bool silent = false}) async {
     try {
-      final ntpNow = await NTP.now();
-      final deviceNow = DateTime.now();
+      final ntpNow = LimaTime.fromInstant(await NTP.now());
+      final deviceNow = LimaTime.now();
 
       if (!mounted) return;
 
@@ -446,7 +564,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
         if (!_ntpInitialized) {
           _timeSynced = false;
         }
-        _now = DateTime.now().add(_serverOffset);
+        _now = LimaTime.now().add(_serverOffset);
       });
 
       if (!silent) {
@@ -469,7 +587,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
       if (!mounted) return;
 
       setState(() {
-        _now = DateTime.now().add(_serverOffset);
+        _now = LimaTime.now().add(_serverOffset);
       });
 
       final shouldResync =
@@ -904,11 +1022,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
 
   Future<void> _handleMark() async {
     if (!_serviciosOk()) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(_mensajeServicios())));
-      }
+      await _showMarkErrorPopup(_mensajeServicios());
       return;
     }
 
@@ -917,40 +1031,24 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
       return;
     }
     if (!_timeSynced) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No se puede marcar sin sincronizar la hora NTP.'),
-          ),
-        );
-      }
+      await _showMarkErrorPopup(
+        'No se puede marcar sin sincronizar la hora del servidor.',
+      );
       return;
     }
 
     final user = _auth.currentUser;
     if (user == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'No hay sesión activa. Vuelve a iniciar sesión con tu cuenta institucional.',
-            ),
-          ),
-        );
-      }
+      await _showMarkErrorPopup(
+        'No hay sesión activa. Vuelve a iniciar sesión con tu cuenta institucional.',
+      );
       return;
     }
 
     if (_dni == null || _dni!.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Tu cuenta no tiene DNI asociado. Comunícate con el administrador.',
-            ),
-          ),
-        );
-      }
+      await _showMarkErrorPopup(
+        'Tu cuenta no tiene DNI asociado. Comunícate con el administrador.',
+      );
       return;
     }
 
@@ -970,51 +1068,30 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
           now.difference(_lastAcceptedFixTime!).inSeconds <= 15;
 
       if (!isRecentFix) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Tu ubicación no está actualizada. Espera unos segundos o pulsa actualizar ubicación.',
-            ),
-          ),
+        await _showMarkErrorPopup(
+          'Tu ubicación no está actualizada. Espera unos segundos o pulsa actualizar ubicación.',
         );
         return;
       }
 
       if (pos == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No se pudo obtener tu ubicación actual.'),
-          ),
-        );
+        await _showMarkErrorPopup('No se pudo obtener tu ubicación actual.');
         return;
       }
 
       if (pos.accuracy > maxAllowed) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-            content: Text(
-              'La ubicación aún no es suficientemente precisa (${pos.accuracy.toStringAsFixed(1)} m). Intenta nuevamente en unos segundos.',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
+        await _showMarkErrorPopup(
+          'La ubicación aún no es suficientemente precisa (${pos.accuracy.toStringAsFixed(1)} m). Intenta nuevamente en unos segundos.',
         );
         return;
       }
 
-      if (pos == null || !isInside) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Estás fuera del área permitida.\n'
-                'Distancia aprox. al perímetro: '
-                '${_distanceToCenter?.toStringAsFixed(1) ?? '-'} m',
-              ),
-            ),
-          );
-        }
+      if (!isInside) {
+        await _showMarkErrorPopup(
+          'Estás fuera del área permitida.\n'
+          'Distancia aprox. al perímetro: '
+          '${_distanceToCenter?.toStringAsFixed(1) ?? '-'} m',
+        );
         return;
       }
 
@@ -1040,9 +1117,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
                 message:
                     'No pudimos registrar tu marcación. Inténtalo nuevamente.',
               ).userMessage;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      await _showMarkErrorPopup(message);
     } finally {
       if (mounted) {
         setState(() {
