@@ -70,6 +70,6 @@ class DefaultFirebaseOptions {
     messagingSenderId: '125091434839',
     projectId: 'asistencia-personal-b0674',
     storageBucket: 'asistencia-personal-b0674.firebasestorage.app',
-    iosBundleId: 'com.lasalle.asistenciapersonal1',
+    iosBundleId: 'pe.edu.lasalle.asistenciapersonal',
   );
 }
