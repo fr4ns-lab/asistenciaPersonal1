@@ -145,11 +145,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   _DashboardContent(
                     data: snapshot.data!,
                     onOpenDetail:
-                        ({required title, statuses}) => _showAttendanceDetail(
-                          snapshot.data!,
-                          title: title,
-                          statuses: statuses,
-                        ),
+                        ({required title, statuses, markStatuses}) =>
+                            _showAttendanceDetail(
+                              snapshot.data!,
+                              title: title,
+                              statuses: statuses,
+                              markStatuses: markStatuses,
+                            ),
                   ),
               ],
             ),
@@ -163,15 +165,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     DashboardResponse data, {
     required String title,
     Set<String>? statuses,
+    Set<String>? markStatuses,
   }) {
     final daily =
-        statuses == null
-            ? data.daily
-            : data.daily
-                .where(
-                  (item) => statuses.contains(item.status.trim().toLowerCase()),
-                )
-                .toList();
+        data.daily.where((item) {
+          final matchesStatus =
+              statuses == null ||
+              statuses.contains(item.status.trim().toLowerCase());
+          final matchesMarkStatus =
+              markStatuses == null ||
+              markStatuses.contains(item.markStatus.trim().toLowerCase());
+          return matchesStatus && matchesMarkStatus;
+        }).toList();
 
     showModalBottomSheet<void>(
       context: context,
@@ -253,7 +258,11 @@ class _DashboardContent extends StatelessWidget {
   const _DashboardContent({required this.data, required this.onOpenDetail});
 
   final DashboardResponse data;
-  final void Function({required String title, Set<String>? statuses})
+  final void Function({
+    required String title,
+    Set<String>? statuses,
+    Set<String>? markStatuses,
+  })
   onOpenDetail;
 
   @override
@@ -267,107 +276,120 @@ class _DashboardContent extends StatelessWidget {
       children: [
         _EmployeePeriodHeader(employee: data.employee, period: data.period),
         const SizedBox(height: 12),
-        _PanelCard(
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const _CardLabel('ASISTENCIA DEL PERIODO'),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${_formatNumber(summary.compliancePercentage)}%',
-                      style: const TextStyle(
-                        color: Color(0xFF0F172A),
-                        fontSize: 36,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _StatusPill(
-                      label:
-                          summary.attendanceLevel.label.isEmpty
-                              ? 'Nivel no informado'
-                              : summary.attendanceLevel.label,
-                      color: levelColor,
-                    ),
-                  ],
-                ),
-              ),
-              Stack(
-                alignment: Alignment.center,
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => onOpenDetail(title: 'Detalle de días marcados'),
+            borderRadius: BorderRadius.circular(8),
+            child: _PanelCard(
+              child: Row(
                 children: [
-                  SizedBox(
-                    width: 78,
-                    height: 78,
-                    child: CircularProgressIndicator(
-                      value: (summary.compliancePercentage / 100).clamp(0, 1),
-                      strokeWidth: 8,
-                      backgroundColor: const Color(0xFFE2E8F0),
-                      valueColor: AlwaysStoppedAnimation<Color>(levelColor),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Flexible(child: _CardLabel('DÍAS MARCADOS')),
+                            const SizedBox(width: 2),
+                            IconButton(
+                              tooltip: 'Información sobre días marcados',
+                              onPressed: () => _showDaysMarkedInfo(context),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 24,
+                                height: 24,
+                              ),
+                              icon: const Icon(
+                                Icons.info_outline_rounded,
+                                color: Color(0xFF2563EB),
+                                size: 18,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          summary.workedDaysLabel.isEmpty
+                              ? '${summary.workedDays} de ${summary.expectedWorkingDays} días programados con marcación'
+                              : summary.workedDaysLabel,
+                          style: const TextStyle(
+                            color: Color(0xFF334155),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          '${_formatNumber(summary.compliancePercentage)}%',
+                          style: const TextStyle(
+                            color: Color(0xFF0F172A),
+                            fontSize: 36,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        if (summary.evaluatedThrough.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            _evaluatedThroughLabel(summary.evaluatedThrough),
+                            style: const TextStyle(
+                              color: Color(0xFF64748B),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 3),
+                        Text(
+                          'Quedan ${summary.remainingScheduledDays} días programados este mes',
+                          style: const TextStyle(
+                            color: Color(0xFF64748B),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  Icon(Icons.insights_rounded, color: levelColor, size: 26),
-                ],
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        InkWell(
-          onTap: () => onOpenDetail(title: 'Detalle de asistencia'),
-          borderRadius: BorderRadius.circular(8),
-          child: _PanelCard(
-            child: Row(
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEFF6FF),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.calendar_month_rounded,
-                    color: Color(0xFF2563EB),
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  const SizedBox(width: 12),
+                  Column(
                     children: [
-                      const _CardLabel('DÍAS TRABAJADOS'),
-                      const SizedBox(height: 5),
-                      Text(
-                        summary.workedDaysLabel.isEmpty
-                            ? '${summary.workedDays} días trabajados'
-                            : summary.workedDaysLabel,
-                        style: const TextStyle(
-                          color: Color(0xFF0F172A),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                        ),
+                      Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          SizedBox(
+                            width: 72,
+                            height: 72,
+                            child: CircularProgressIndicator(
+                              value: (summary.compliancePercentage / 100).clamp(
+                                0,
+                                1,
+                              ),
+                              strokeWidth: 7,
+                              backgroundColor: const Color(0xFFE2E8F0),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                levelColor,
+                              ),
+                            ),
+                          ),
+                          Icon(
+                            Icons.insights_rounded,
+                            color: levelColor,
+                            size: 24,
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 2),
-                      const Text(
-                        'Ver detalle diario',
-                        style: TextStyle(
-                          color: Color(0xFF2563EB),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      const SizedBox(height: 7),
+                      _StatusPill(
+                        label:
+                            summary.attendanceLevel.label.isEmpty
+                                ? 'Nivel no informado'
+                                : summary.attendanceLevel.label,
+                        color: levelColor,
                       ),
                     ],
                   ),
-                ),
-                const Icon(
-                  Icons.chevron_right_rounded,
-                  color: Color(0xFF64748B),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -380,6 +402,8 @@ class _DashboardContent extends StatelessWidget {
                 child: _MetricCard(
                   label: 'PUNTUALIDAD',
                   value: '${_formatNumber(summary.onTimePercentage)}%',
+                  detail:
+                      '${summary.onTimeDays} de ${summary.expectedWorkingDays} días programados',
                   icon: Icons.verified_rounded,
                   color: const Color(0xFF16A34A),
                   onTap:
@@ -387,31 +411,21 @@ class _DashboardContent extends StatelessWidget {
                         title: 'Detalle de puntualidad',
                         statuses: const {'puntual'},
                       ),
-                  comparison: _comparisonText(
-                    summary: data.comparison,
-                    value: data.comparison.deltas.onTimePercentage,
-                    improved: data.comparison.improved.onTimePercentage,
-                    suffix: '%',
-                  ),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: _MetricCard(
-                  label: 'TARDANZAS',
-                  value: '${summary.lateDays}',
-                  icon: Icons.schedule_rounded,
-                  color: const Color(0xFFDC2626),
+                  label: 'MARCACIONES INCOMPLETAS',
+                  value: '${summary.incompleteMarkDays} días',
+                  detail: 'Requieren revisar entrada o salida',
+                  icon: Icons.fact_check_outlined,
+                  color: const Color(0xFFD97706),
                   onTap:
                       () => onOpenDetail(
-                        title: 'Detalle de tardanzas',
-                        statuses: const {'tarde'},
+                        title: 'Marcaciones incompletas',
+                        markStatuses: const {'incompleta'},
                       ),
-                  comparison: _comparisonText(
-                    summary: data.comparison,
-                    value: data.comparison.deltas.lateDays,
-                    improved: data.comparison.improved.lateDays,
-                  ),
                 ),
               ),
             ],
@@ -424,40 +438,64 @@ class _DashboardContent extends StatelessWidget {
             children: [
               Expanded(
                 child: _MetricCard(
-                  label: 'SIN MARCA',
-                  value: '${summary.missingDays}',
-                  icon: Icons.event_busy_rounded,
-                  color: const Color(0xFFDC2626),
+                  label: 'TARDANZA AL INGRESAR',
+                  value: _minutesValue(summary.lateMinutesTotal),
+                  detail: _lateArrivalDetail(summary),
+                  icon: Icons.login_rounded,
+                  color: const Color(0xFFD97706),
                   onTap:
                       () => onOpenDetail(
-                        title: 'Detalle de días sin marca',
-                        statuses: const {'sin_marca'},
+                        title: 'Detalle de tardanzas al ingresar',
+                        statuses: const {'tarde', 'tarde_y_salida_anticipada'},
                       ),
-                  comparison: _comparisonText(
-                    summary: data.comparison,
-                    value: data.comparison.deltas.missingDays,
-                    improved: data.comparison.improved.missingDays,
-                  ),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: _MetricCard(
-                  label: 'DÍAS LIBRES',
-                  value: '${summary.freeDays}',
-                  icon: Icons.beach_access_rounded,
-                  color: const Color(0xFF64748B),
+                  label: 'SALIDA ANTICIPADA',
+                  value: _minutesValue(summary.earlyDepartureMinutesTotal),
+                  detail: _earlyDepartureDetail(summary),
+                  icon: Icons.logout_rounded,
+                  color: const Color(0xFFDC2626),
                   onTap:
                       () => onOpenDetail(
-                        title: 'Detalle de días libres',
-                        statuses: const {'dia_libre'},
+                        title: 'Detalle de salidas anticipadas',
+                        statuses: const {
+                          'salida_anticipada',
+                          'tarde_y_salida_anticipada',
+                        },
                       ),
                 ),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
+        _MetricCard(
+          label: 'INCIDENCIAS DE HORARIO',
+          value: _minutesValue(summary.scheduleIncidenceMinutesTotal),
+          detail: summary.scheduleIncidenceMinutesLabel,
+          icon: Icons.schedule_rounded,
+          color: const Color(0xFFD97706),
+        ),
+        const SizedBox(height: 12),
+        _MetricCard(
+          label: 'SIN MARCACIÓN',
+          value: '${summary.missingDays}',
+          detail:
+              summary.missingDaysLabel.isEmpty
+                  ? '${summary.missingDays} días programados sin marca'
+                  : summary.missingDaysLabel,
+          icon: Icons.event_busy_rounded,
+          color: const Color(0xFFDC2626),
+          onTap:
+              () => onOpenDetail(
+                title: 'Detalle de días sin marcación',
+                markStatuses: const {'sin_marca'},
+              ),
+        ),
+        const SizedBox(height: 12),
         _ComparisonCard(comparison: data.comparison),
         const SizedBox(height: 24),
         const Text(
@@ -478,6 +516,25 @@ class _DashboardContent extends StatelessWidget {
       ],
     );
   }
+}
+
+void _showDaysMarkedInfo(BuildContext context) {
+  showDialog<void>(
+    context: context,
+    builder:
+        (context) => AlertDialog(
+          title: const Text('Días marcados'),
+          content: const Text(
+            'Cuenta los días programados hasta la fecha en los que registraste al menos una marcación.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Entendido'),
+            ),
+          ],
+        ),
+  );
 }
 
 class _EmployeePeriodHeader extends StatelessWidget {
@@ -601,17 +658,17 @@ class _MetricCard extends StatelessWidget {
   const _MetricCard({
     required this.label,
     required this.value,
+    required this.detail,
     required this.icon,
     required this.color,
-    this.comparison,
     this.onTap,
   });
 
   final String label;
   final String value;
+  final String detail;
   final IconData icon;
   final Color color;
-  final _ComparisonText? comparison;
   final VoidCallback? onTap;
 
   @override
@@ -638,29 +695,28 @@ class _MetricCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             value,
-            style: const TextStyle(
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
               color: Color(0xFF0F172A),
-              fontSize: 27,
+              fontSize: value.length > 10 ? 20 : 27,
               fontWeight: FontWeight.w800,
             ),
           ),
-          if (comparison != null) ...[
+          if (detail.isNotEmpty) ...[
             const SizedBox(height: 3),
             Text(
-              comparison!.text,
-              maxLines: 1,
+              detail,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color:
-                    comparison!.improved
-                        ? const Color(0xFF16A34A)
-                        : const Color(0xFF64748B),
+              style: const TextStyle(
+                color: Color(0xFF64748B),
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
               ),
             ),
           ] else ...[
-            const SizedBox(height: 14),
+            const SizedBox(height: 16),
           ],
         ],
       ),
@@ -746,7 +802,7 @@ class _ComparisonCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Comparación mensual',
+                      'Comparación de asistencia',
                       style: TextStyle(
                         color: Color(0xFF0F172A),
                         fontSize: 16,
@@ -755,7 +811,7 @@ class _ComparisonCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Respecto a ${previous.month}',
+                      _previousCompleteMonthLabel(previous),
                       style: const TextStyle(
                         color: Color(0xFF64748B),
                         fontSize: 12,
@@ -904,11 +960,16 @@ class _DailyAttendanceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = _statusPresentation(item.status);
-    final hasSinglePunch =
-        item.punchCount <= 1 || item.firstPunch == item.lastPunch;
+    final isIncomplete = item.markStatus.trim().toLowerCase() == 'incompleta';
+    final status =
+        isIncomplete
+            ? const _StatusPresentation(
+              label: 'Marcación incompleta',
+              color: Color(0xFFD97706),
+            )
+            : _statusPresentation(item.status);
     final entry = _displayRecordedTime(item.firstPunch);
-    final exit = hasSinglePunch ? '-' : _displayRecordedTime(item.lastPunch);
+    final exit = _displayRecordedTime(item.lastPunch);
     return _PanelCard(
       padding: EdgeInsets.zero,
       child: Container(
@@ -947,11 +1008,85 @@ class _DailyAttendanceCard extends StatelessWidget {
               value:
                   '${_displayTime(item.expectedIn)} - ${_displayTime(item.expectedOut)}',
             ),
-            _DetailLine(label: 'Entrada registrada', value: entry),
-            _DetailLine(label: 'Salida registrada', value: exit),
+            _DetailLine(label: 'Primera marcación', value: entry),
+            _DetailLine(label: 'Última marcación', value: exit),
             _DetailLine(label: 'Cantidad', value: '${item.punchCount}'),
+            if (isIncomplete) ...[
+              const SizedBox(height: 10),
+              _IncompleteMarkNotice(assumption: item.singleMarkAssumption),
+            ] else ...[
+              if (item.lateArrivalMinutes > 0)
+                _DetailLine(
+                  label: 'Tardanza al ingresar',
+                  value: '${item.lateArrivalMinutes} min tarde al ingresar',
+                ),
+              if (item.earlyDepartureMinutes > 0)
+                _DetailLine(
+                  label: 'Salida anticipada',
+                  value:
+                      '${item.earlyDepartureMinutes} min de salida anticipada',
+                ),
+            ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _IncompleteMarkNotice extends StatelessWidget {
+  const _IncompleteMarkNotice({required this.assumption});
+
+  final String? assumption;
+
+  @override
+  Widget build(BuildContext context) {
+    final message = switch (assumption) {
+      'posible_entrada' => 'Parece una entrada; falta confirmar la salida',
+      'posible_salida' => 'Parece una salida; falta confirmar la entrada',
+      _ => 'Requiere revisar la entrada o la salida',
+    };
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.warning_amber_rounded,
+            color: Color(0xFFD97706),
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Marcación incompleta',
+                  style: TextStyle(
+                    color: Color(0xFF92400E),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  message,
+                  style: const TextStyle(
+                    color: Color(0xFF92400E),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1170,13 +1305,6 @@ class _DashboardError extends StatelessWidget {
   }
 }
 
-class _ComparisonText {
-  const _ComparisonText({required this.text, required this.improved});
-
-  final String text;
-  final bool improved;
-}
-
 class _ComparisonRowData {
   const _ComparisonRowData({
     required this.label,
@@ -1286,6 +1414,42 @@ String _monthLabel(DateTime date) {
   return labels[date.month - 1];
 }
 
+String _evaluatedThroughLabel(String value) {
+  final date = DateTime.tryParse(value);
+  if (date == null) return 'Al $value';
+  return 'Al ${date.day} de ${_monthLabel(date).toLowerCase()}';
+}
+
+String _minutesValue(int minutes) {
+  return minutes == 1 ? '1 minuto' : '$minutes minutos';
+}
+
+String _lateArrivalDetail(DashboardSummary summary) {
+  if (summary.lateMinutesTotal == 0) return 'Sin tardanzas registradas';
+  return summary.lateDays == 1
+      ? '1 día con tardanza'
+      : '${summary.lateDays} días con tardanza';
+}
+
+String _earlyDepartureDetail(DashboardSummary summary) {
+  if (summary.earlyDepartureMinutesTotal == 0) {
+    return 'Sin salidas anticipadas registradas';
+  }
+  return summary.earlyDepartureDays == 1
+      ? '1 día con salida anticipada'
+      : '${summary.earlyDepartureDays} días con salida anticipada';
+}
+
+String _previousCompleteMonthLabel(DashboardPreviousPeriod period) {
+  final month = period.month;
+  final date = DateTime.tryParse('$month-01');
+  if (date != null) {
+    return 'Comparado con ${_monthLabel(date).toLowerCase()} de ${date.year} completo';
+  }
+  if (month.isNotEmpty) return 'Comparado con $month completo';
+  return 'Comparado con el mes anterior completo';
+}
+
 String _formatNumber(double value) {
   return value == value.roundToDouble()
       ? value.toInt().toString()
@@ -1300,19 +1464,6 @@ String _signedNumber(double value) {
 String _displayTime(String value) => value.isEmpty ? 'Sin marca' : value;
 
 String _displayRecordedTime(String value) => value.isEmpty ? '-' : value;
-
-_ComparisonText? _comparisonText({
-  required DashboardComparison summary,
-  required num value,
-  required bool improved,
-  String suffix = '',
-}) {
-  if (summary.previousPeriod == null) return null;
-  return _ComparisonText(
-    text: '${_signedNumber(value.toDouble())}$suffix vs. anterior',
-    improved: improved,
-  );
-}
 
 Color _attendanceLevelColor(String level) {
   switch (level.trim().toLowerCase()) {
@@ -1340,7 +1491,22 @@ _StatusPresentation _statusPresentation(String status) {
     case 'tarde':
       return const _StatusPresentation(
         label: 'Tarde',
+        color: Color(0xFFD97706),
+      );
+    case 'salida_anticipada':
+      return const _StatusPresentation(
+        label: 'Salida anticipada',
+        color: Color(0xFFD97706),
+      );
+    case 'tarde_y_salida_anticipada':
+      return const _StatusPresentation(
+        label: 'Tarde y salida anticipada',
         color: Color(0xFFDC2626),
+      );
+    case 'marca_incompleta':
+      return const _StatusPresentation(
+        label: 'Marca incompleta',
+        color: Color(0xFFD97706),
       );
     case 'sin_marca':
       return const _StatusPresentation(
@@ -1351,6 +1517,11 @@ _StatusPresentation _statusPresentation(String status) {
       return const _StatusPresentation(
         label: 'Día libre',
         color: Color(0xFF64748B),
+      );
+    case 'con_marcacion_sin_horario':
+      return const _StatusPresentation(
+        label: 'Con marcación sin horario',
+        color: Color(0xFF2563EB),
       );
     default:
       return _StatusPresentation(

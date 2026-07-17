@@ -1,4 +1,5 @@
 import 'package:asistenciapersonal1/models/dashboard_response.dart';
+import 'package:asistenciapersonal1/models/api_auth_response.dart';
 import 'package:asistenciapersonal1/services/api_client.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/dashboard_service.dart';
@@ -9,6 +10,23 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 void main() {
+  group('ApiAuthResponse', () {
+    test('exige geolocalización si el API no envía la política', () {
+      final response = ApiAuthResponse.fromJson({'access_token': 'jwt'});
+
+      expect(response.geolocationRequired, isTrue);
+    });
+
+    test('respeta la política de geolocalización entregada por el API', () {
+      final response = ApiAuthResponse.fromJson({
+        'access_token': 'jwt',
+        'geolocation_required': false,
+      });
+
+      expect(response.geolocationRequired, isFalse);
+    });
+  });
+
   group('ApiClient', () {
     test('agrega el token interno en el encabezado Authorization', () async {
       final client = ApiClient(
@@ -126,11 +144,30 @@ void main() {
           'email': 'jgallegos@lasalle.edu.pe',
         },
         'period': {'from': '2026-07-01', 'to': '2026-07-31'},
+        'evaluation_period': {
+          'from': '2026-07-01',
+          'to': '2026-07-15',
+          'is_complete': false,
+        },
         'summary': {
           'expected_working_days': 7,
           'worked_days': 6,
+          'complete_mark_days': 5,
+          'incomplete_mark_days': 1,
+          'month_expected_working_days': 23,
+          'remaining_scheduled_days': 13,
+          'evaluated_through': '2026-07-15',
           'on_time_days': 5,
           'late_days': 1,
+          'late_minutes_total': 4,
+          'late_minutes_label': '4 minutos de tardanza acumulada',
+          'early_departure_days': 1,
+          'early_departure_minutes_total': 10,
+          'early_departure_minutes_label':
+              '10 minutos de salida anticipada acumulada',
+          'schedule_incidence_minutes_total': 14,
+          'schedule_incidence_minutes_label':
+              '14 minutos de incidencias de horario',
           'missing_days': 1,
           'free_days': 2,
           'on_time_percentage': 71.43,
@@ -171,7 +208,12 @@ void main() {
             'first_punch': '07:22',
             'last_punch': '12:25',
             'punch_count': 7,
+            'mark_status': 'completa',
             'status': 'puntual',
+            'late_minutes': 0,
+            'late_arrival_minutes': 0,
+            'early_departure_minutes': 0,
+            'schedule_incidence_minutes': 0,
           },
         ],
         'recent_checkins': [
@@ -190,12 +232,22 @@ void main() {
 
       expect(dashboard.employee.empCode, '70551254');
       expect(dashboard.employee.email, 'jgallegos@lasalle.edu.pe');
+      expect(dashboard.evaluationPeriod.isComplete, isFalse);
+      expect(dashboard.evaluationPeriod.to, '2026-07-15');
       expect(dashboard.summary.onTimePercentage, 71.43);
+      expect(dashboard.summary.monthExpectedWorkingDays, 23);
+      expect(dashboard.summary.remainingScheduledDays, 13);
+      expect(dashboard.summary.lateMinutesTotal, 4);
+      expect(dashboard.summary.incompleteMarkDays, 1);
+      expect(dashboard.summary.earlyDepartureMinutesTotal, 10);
+      expect(dashboard.summary.scheduleIncidenceMinutesTotal, 14);
       expect(dashboard.summary.attendanceLevel.key, 'buena');
       expect(dashboard.comparison.deltas.compliancePercentage, 12.5);
       expect(dashboard.comparison.improved.lateDays, isTrue);
       expect(dashboard.statusCounts['puntual'], 5);
       expect(dashboard.daily.single.status, 'puntual');
+      expect(dashboard.daily.single.markStatus, 'completa');
+      expect(dashboard.daily.single.lateMinutes, 0);
       expect(dashboard.recentCheckins.single.terminalAlias, 'APP');
       expect(dashboard.hasData, isTrue);
     });

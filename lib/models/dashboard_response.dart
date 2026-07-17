@@ -2,6 +2,7 @@ class DashboardResponse {
   const DashboardResponse({
     required this.employee,
     required this.period,
+    required this.evaluationPeriod,
     required this.summary,
     required this.comparison,
     required this.statusCounts,
@@ -11,6 +12,7 @@ class DashboardResponse {
 
   final DashboardEmployee employee;
   final DashboardPeriod period;
+  final DashboardEvaluationPeriod evaluationPeriod;
   final DashboardSummary summary;
   final DashboardComparison comparison;
   final Map<String, int> statusCounts;
@@ -21,6 +23,9 @@ class DashboardResponse {
     return DashboardResponse(
       employee: DashboardEmployee.fromJson(_map(json['employee'])),
       period: DashboardPeriod.fromJson(_map(json['period'])),
+      evaluationPeriod: DashboardEvaluationPeriod.fromJson(
+        _map(json['evaluation_period']),
+      ),
       summary: DashboardSummary.fromJson(_map(json['summary'])),
       comparison: DashboardComparison.fromJson(_map(json['comparison'])),
       statusCounts: _intMap(json['status_counts']),
@@ -32,6 +37,7 @@ class DashboardResponse {
 
   bool get hasData {
     return summary.expectedWorkingDays > 0 ||
+        summary.monthExpectedWorkingDays > 0 ||
         summary.workedDays > 0 ||
         summary.freeDays > 0 ||
         daily.isNotEmpty ||
@@ -73,6 +79,26 @@ class DashboardPeriod {
   }
 }
 
+class DashboardEvaluationPeriod {
+  const DashboardEvaluationPeriod({
+    required this.from,
+    required this.to,
+    required this.isComplete,
+  });
+
+  final String from;
+  final String to;
+  final bool isComplete;
+
+  factory DashboardEvaluationPeriod.fromJson(Map<String, dynamic> json) {
+    return DashboardEvaluationPeriod(
+      from: _string(json['from']),
+      to: _string(json['to']),
+      isComplete: _bool(json['is_complete']),
+    );
+  }
+}
+
 class AttendanceLevel {
   const AttendanceLevel({required this.key, required this.label});
 
@@ -91,8 +117,20 @@ class DashboardSummary {
   const DashboardSummary({
     required this.expectedWorkingDays,
     required this.workedDays,
+    required this.completeMarkDays,
+    required this.incompleteMarkDays,
+    required this.monthExpectedWorkingDays,
+    required this.remainingScheduledDays,
+    required this.evaluatedThrough,
     required this.onTimeDays,
     required this.lateDays,
+    required this.lateMinutesTotal,
+    required this.lateMinutesLabel,
+    required this.earlyDepartureDays,
+    required this.earlyDepartureMinutesTotal,
+    required this.earlyDepartureMinutesLabel,
+    required this.scheduleIncidenceMinutesTotal,
+    required this.scheduleIncidenceMinutesLabel,
     required this.missingDays,
     required this.freeDays,
     required this.onTimePercentage,
@@ -104,8 +142,20 @@ class DashboardSummary {
 
   final int expectedWorkingDays;
   final int workedDays;
+  final int completeMarkDays;
+  final int incompleteMarkDays;
+  final int monthExpectedWorkingDays;
+  final int remainingScheduledDays;
+  final String evaluatedThrough;
   final int onTimeDays;
   final int lateDays;
+  final int lateMinutesTotal;
+  final String lateMinutesLabel;
+  final int earlyDepartureDays;
+  final int earlyDepartureMinutesTotal;
+  final String earlyDepartureMinutesLabel;
+  final int scheduleIncidenceMinutesTotal;
+  final String scheduleIncidenceMinutesLabel;
   final int missingDays;
   final int freeDays;
   final double onTimePercentage;
@@ -118,8 +168,26 @@ class DashboardSummary {
     return DashboardSummary(
       expectedWorkingDays: _int(json['expected_working_days']),
       workedDays: _int(json['worked_days']),
+      completeMarkDays: _int(json['complete_mark_days']),
+      incompleteMarkDays: _int(json['incomplete_mark_days']),
+      monthExpectedWorkingDays: _int(json['month_expected_working_days']),
+      remainingScheduledDays: _int(json['remaining_scheduled_days']),
+      evaluatedThrough: _string(json['evaluated_through']),
       onTimeDays: _int(json['on_time_days']),
       lateDays: _int(json['late_days']),
+      lateMinutesTotal: _int(json['late_minutes_total']),
+      lateMinutesLabel: _string(json['late_minutes_label']),
+      earlyDepartureDays: _int(json['early_departure_days']),
+      earlyDepartureMinutesTotal: _int(json['early_departure_minutes_total']),
+      earlyDepartureMinutesLabel: _string(
+        json['early_departure_minutes_label'],
+      ),
+      scheduleIncidenceMinutesTotal: _int(
+        json['schedule_incidence_minutes_total'],
+      ),
+      scheduleIncidenceMinutesLabel: _string(
+        json['schedule_incidence_minutes_label'],
+      ),
       missingDays: _int(json['missing_days']),
       freeDays: _int(json['free_days']),
       onTimePercentage: _double(json['on_time_percentage']),
@@ -243,7 +311,13 @@ class DashboardDaily {
     required this.firstPunch,
     required this.lastPunch,
     required this.punchCount,
+    required this.markStatus,
     required this.status,
+    required this.singleMarkAssumption,
+    required this.lateMinutes,
+    required this.lateArrivalMinutes,
+    required this.earlyDepartureMinutes,
+    required this.scheduleIncidenceMinutes,
   });
 
   final String date;
@@ -253,7 +327,13 @@ class DashboardDaily {
   final String firstPunch;
   final String lastPunch;
   final int punchCount;
+  final String markStatus;
   final String status;
+  final String? singleMarkAssumption;
+  final int lateMinutes;
+  final int lateArrivalMinutes;
+  final int earlyDepartureMinutes;
+  final int scheduleIncidenceMinutes;
 
   factory DashboardDaily.fromJson(Map<String, dynamic> json) {
     return DashboardDaily(
@@ -264,7 +344,13 @@ class DashboardDaily {
       firstPunch: _string(json['first_punch']),
       lastPunch: _string(json['last_punch']),
       punchCount: _int(json['punch_count']),
+      markStatus: _string(json['mark_status']),
       status: _string(json['status']),
+      singleMarkAssumption: _nullableString(json['single_mark_assumption']),
+      lateMinutes: _int(json['late_minutes']),
+      lateArrivalMinutes: _int(json['late_arrival_minutes']),
+      earlyDepartureMinutes: _int(json['early_departure_minutes']),
+      scheduleIncidenceMinutes: _int(json['schedule_incidence_minutes']),
     );
   }
 }
@@ -322,6 +408,11 @@ Map<String, int> _intMap(Object? value) {
 }
 
 String _string(Object? value) => value?.toString() ?? '';
+
+String? _nullableString(Object? value) {
+  final text = _string(value).trim();
+  return text.isEmpty ? null : text;
+}
 
 int _int(Object? value) {
   if (value is num) return value.toInt();

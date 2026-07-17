@@ -29,6 +29,8 @@ class MarcacionAsistenciaPage extends StatefulWidget {
 class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     with WidgetsBindingObserver {
   bool _gpsActivo = true;
+  bool _geolocationRequired = true;
+  bool _loadingGeolocationPolicy = true;
   Duration _serverOffset = Duration.zero;
   DateTime? _lastNtpSyncAt;
   bool _ntpInitialized = false;
@@ -78,18 +80,13 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     _cargarInfoVersionYEscucharEstado();
     _api = TransactionApi(baseUrl: ApiConfig.baseUrl);
 
-    _validarServiciosRequeridos();
-    _servicesTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      _validarServiciosRequeridos();
-    });
-
     _startClock();
     _initUserData().then((_) async {
       if (_dni != null && _dni!.isNotEmpty) {
         await _refreshLastMark();
       }
     });
-    _initLocationTracking();
+    _initializeGeolocationPolicy();
   }
 
   @override
@@ -104,19 +101,52 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     super.dispose();
   }
 
-  bool _serviciosOk() => _gpsActivo && _internetActivo;
+  bool _serviciosOk() =>
+      _internetActivo && (!_geolocationRequired || _gpsActivo);
 
   String _mensajeServicios() {
-    if (!_gpsActivo && !_internetActivo) {
+    if (_geolocationRequired && !_gpsActivo && !_internetActivo) {
       return 'Debes activar el GPS y conectarte a Internet para usar la aplicación.';
     }
-    if (!_gpsActivo) {
+    if (_geolocationRequired && !_gpsActivo) {
       return 'Debes activar el GPS para usar la aplicación.';
     }
     if (!_internetActivo) {
       return 'Debes conectarte a Internet para usar la aplicación.';
     }
     return '';
+  }
+
+  Future<void> _initializeGeolocationPolicy() async {
+    var geolocationRequired = true;
+    try {
+      geolocationRequired = await AuthService.instance.isGeolocationRequired();
+    } catch (error) {
+      debugPrint('No se pudo restaurar la política de ubicación: $error');
+    }
+    if (!mounted) return;
+
+    setState(() {
+      _geolocationRequired = geolocationRequired;
+      _loadingGeolocationPolicy = false;
+    });
+
+    await _validarServiciosRequeridos();
+    if (!mounted) return;
+
+    if (_geolocationRequired) {
+      try {
+        await _initLocationTracking();
+      } catch (error) {
+        debugPrint('Error al iniciar la validación de ubicación: $error');
+      }
+    }
+
+    if (!mounted) return;
+
+    _servicesTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      _validarServiciosRequeridos();
+    });
   }
 
   String _userDocIdFromEmail(String email) {
@@ -142,8 +172,11 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
   }
 
   Future<void> _validarServiciosRequeridos() async {
-    final gpsActivo = await Geolocator.isLocationServiceEnabled();
     final internetActivo = await _hasInternetConnection();
+    final gpsActivo =
+        _geolocationRequired
+            ? await Geolocator.isLocationServiceEnabled()
+            : true;
 
     if (!mounted) return;
 
@@ -606,6 +639,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     if (state == AppLifecycleState.resumed) {
       Future.microtask(() async {
         if (!mounted) return;
+        if (_loadingGeolocationPolicy) return;
 
         await _validarServiciosRequeridos();
 
@@ -614,10 +648,12 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
 
         if (!mounted) return;
 
-        try {
-          await _locateAndCheck();
-        } catch (e) {
-          debugPrint('Error al reanudar ubicación: $e');
+        if (_geolocationRequired) {
+          try {
+            await _locateAndCheck();
+          } catch (e) {
+            debugPrint('Error al reanudar ubicación: $e');
+          }
         }
       });
     }
@@ -993,15 +1029,15 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
 
   Future<void> _enviarMarcacionBiotime({
     required String empCode,
-    required double lat,
-    required double lng,
+    double? lat,
+    double? lng,
   }) async {
     final tx = TransactionRequest(
       empCode: empCode,
       punchTime: null,
       longitude: lng,
       latitude: lat,
-      gpsLocation: 'Lat: $lat, Lng: $lng',
+      gpsLocation: lat != null && lng != null ? 'Lat: $lat, Lng: $lng' : null,
       mobile: null,
     );
 
@@ -1022,7 +1058,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
   }
 
   Future<void> _handleMark() async {
-    if (!_serviciosOk()) {
+    if (_geolocationRequired && !_serviciosOk()) {
       await _showMarkErrorPopup(_mensajeServicios());
       return;
     }
@@ -1058,48 +1094,56 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     });
 
     try {
-      await _locateAndCheck();
+      double? latitude;
+      double? longitude;
 
-      final pos = _position;
-      final isInside = _inside ?? false;
-      final maxAllowed = _accuracyMax ?? _maxAcceptedAccuracyFallback;
-      final now = DateTime.now();
-      final isRecentFix =
-          _lastAcceptedFixTime != null &&
-          now.difference(_lastAcceptedFixTime!).inSeconds <= 15;
+      if (_geolocationRequired) {
+        await _locateAndCheck();
 
-      if (!isRecentFix) {
-        await _showMarkErrorPopup(
-          'Tu ubicación no está actualizada. Espera unos segundos o pulsa actualizar ubicación.',
-        );
-        return;
-      }
+        final pos = _position;
+        final isInside = _inside ?? false;
+        final maxAllowed = _accuracyMax ?? _maxAcceptedAccuracyFallback;
+        final now = DateTime.now();
+        final isRecentFix =
+            _lastAcceptedFixTime != null &&
+            now.difference(_lastAcceptedFixTime!).inSeconds <= 15;
 
-      if (pos == null) {
-        await _showMarkErrorPopup('No se pudo obtener tu ubicación actual.');
-        return;
-      }
+        if (!isRecentFix) {
+          await _showMarkErrorPopup(
+            'Tu ubicación no está actualizada. Espera unos segundos o pulsa actualizar ubicación.',
+          );
+          return;
+        }
 
-      if (pos.accuracy > maxAllowed) {
-        await _showMarkErrorPopup(
-          'La ubicación aún no es suficientemente precisa (${pos.accuracy.toStringAsFixed(1)} m). Intenta nuevamente en unos segundos.',
-        );
-        return;
-      }
+        if (pos == null) {
+          await _showMarkErrorPopup('No se pudo obtener tu ubicación actual.');
+          return;
+        }
 
-      if (!isInside) {
-        await _showMarkErrorPopup(
-          'Estás fuera del área permitida.\n'
-          'Distancia aprox. al perímetro: '
-          '${_distanceToCenter?.toStringAsFixed(1) ?? '-'} m',
-        );
-        return;
+        if (pos.accuracy > maxAllowed) {
+          await _showMarkErrorPopup(
+            'La ubicación aún no es suficientemente precisa (${pos.accuracy.toStringAsFixed(1)} m). Intenta nuevamente en unos segundos.',
+          );
+          return;
+        }
+
+        if (!isInside) {
+          await _showMarkErrorPopup(
+            'Estás fuera del área permitida.\n'
+            'Distancia aprox. al perímetro: '
+            '${_distanceToCenter?.toStringAsFixed(1) ?? '-'} m',
+          );
+          return;
+        }
+
+        latitude = pos.latitude;
+        longitude = pos.longitude;
       }
 
       await _enviarMarcacionBiotime(
         empCode: _dni!,
-        lat: pos.latitude,
-        lng: pos.longitude,
+        lat: latitude,
+        lng: longitude,
       );
 
       await _refreshLastMark();
@@ -1249,6 +1293,16 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     final pos = _position;
 
     final statusColor = _statusColor(context);
+    final locationReady = !_geolocationRequired || _inside == true;
+    final servicesReady =
+        !_geolocationRequired || (_serviciosOk() && !_validandoServicios);
+    final canMark =
+        !_loading &&
+        !_loadingGeolocationPolicy &&
+        _timeSynced &&
+        locationReady &&
+        !_appBloqueada &&
+        servicesReady;
 
     return Scaffold(
       // floatingActionButton: FloatingActionButton(
@@ -1497,31 +1551,34 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
                           ),
                         ),
                         const SizedBox(height: 18),
-                        AnimatedScale(
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOut,
-                          scale: _inside == null ? 1.0 : 1.015,
-                          child: AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 260),
-                            switchInCurve: Curves.easeOut,
-                            switchOutCurve: Curves.easeOut,
-                            child: _StatusLocationCard(
-                              key: ValueKey(_inside),
-                              color: statusColor,
-                              icon: _statusIcon(),
-                              title: _locationStatusTitle(),
-                              badge:
-                                  pos != null
-                                      ? 'GPS ±${pos.accuracy.toStringAsFixed(0)} m'
-                                      : 'GPS --',
-                              subtitle: _locationStatusSubtitle(),
-                              progress: _locationProgressValue(),
-                              onRefresh: _locateAndCheck,
-                              helperText:
-                                  'Uso de emergencia: actualiza tu ubicación si el seguimiento automático falla.',
+                        if (_geolocationRequired)
+                          AnimatedScale(
+                            duration: const Duration(milliseconds: 220),
+                            curve: Curves.easeOut,
+                            scale: _inside == null ? 1.0 : 1.015,
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 260),
+                              switchInCurve: Curves.easeOut,
+                              switchOutCurve: Curves.easeOut,
+                              child: _StatusLocationCard(
+                                key: ValueKey(_inside),
+                                color: statusColor,
+                                icon: _statusIcon(),
+                                title: _locationStatusTitle(),
+                                badge:
+                                    pos != null
+                                        ? 'GPS ±${pos.accuracy.toStringAsFixed(0)} m'
+                                        : 'GPS --',
+                                subtitle: _locationStatusSubtitle(),
+                                progress: _locationProgressValue(),
+                                onRefresh: _locateAndCheck,
+                                helperText:
+                                    'Uso de emergencia: actualiza tu ubicación si el seguimiento automático falla.',
+                              ),
                             ),
-                          ),
-                        ),
+                          )
+                        else
+                          const _LocationPolicyNotice(),
                         const SizedBox(height: 18),
                         _PreviousCheckCard(
                           lastMarkTime: _lastMarkTime,
@@ -1532,24 +1589,16 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
                         // _NextMarkCard(nextType: _friendlyNextType(nextType)),
                         const SizedBox(height: 28),
                         ElevatedButton(
-                          onPressed:
-                              (_loading ||
-                                      !_timeSynced ||
-                                      _inside != true ||
-                                      _appBloqueada ||
-                                      !_serviciosOk() ||
-                                      _validandoServicios)
-                                  ? null
-                                  : _handleMark,
+                          onPressed: canMark ? _handleMark : null,
                           style: ElevatedButton.styleFrom(
                             backgroundColor:
-                                _inside == true
+                                canMark
                                     ? const Color(0xFF2563EB)
                                     : const Color(0xFF94A3B8),
                             disabledBackgroundColor: const Color(0xFFCBD5E1),
                             foregroundColor: Colors.white,
                             disabledForegroundColor: Colors.white70,
-                            elevation: _inside == true ? 8 : 0,
+                            elevation: canMark ? 8 : 0,
                             shadowColor: const Color(0x552563EB),
                             padding: const EdgeInsets.symmetric(vertical: 18),
                             shape: RoundedRectangleBorder(
@@ -1572,7 +1621,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
                                 )
                               else
                                 Icon(
-                                  _inside == true
+                                  locationReady
                                       ? Icons.fingerprint_rounded
                                       : Icons.location_off_rounded,
                                   size: 26,
@@ -1582,7 +1631,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
                                 child: Text(
                                   _loading
                                       ? 'Registrando...'
-                                      : (_inside == true
+                                      : (locationReady
                                           ? 'Registrar marcación'
                                           : 'Fuera del perímetro'),
                                   overflow: TextOverflow.ellipsis,
@@ -1599,13 +1648,15 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
                         Text(
                           !_timeSynced
                               ? 'No se puede marcar mientras no se sincronice la hora del servidor.'
-                              : (_inside == true
-                                  ? 'Tu ubicación es válida. Ya puedes realizar la marcación.'
-                                  : 'Estás fuera del perímetro permitido. El botón de marcación está deshabilitado hasta que vuelvas a ingresar.'),
+                              : (!_geolocationRequired
+                                  ? 'Marcación autorizada sin validación de ubicación.'
+                                  : (_inside == true
+                                      ? 'Tu ubicación es válida. Ya puedes realizar la marcación.'
+                                      : 'Estás fuera del perímetro permitido. El botón de marcación está deshabilitado hasta que vuelvas a ingresar.')),
                           textAlign: TextAlign.center,
                           style: theme.textTheme.bodySmall?.copyWith(
                             color:
-                                _inside == true
+                                locationReady
                                     ? const Color(0xFF64748B)
                                     : const Color(0xFFDC2626),
                             fontWeight: FontWeight.w700,
@@ -1665,7 +1716,8 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
               ],
             ),
           ),
-          if (_appBloqueada || (!_validandoServicios && !_serviciosOk()))
+          if (_appBloqueada ||
+              (_geolocationRequired && !_validandoServicios && !_serviciosOk()))
             Positioned.fill(
               child: AbsorbPointer(
                 child: Container(color: Colors.black.withOpacity(0.12)),
@@ -1812,6 +1864,39 @@ class _ProfileCard extends StatelessWidget {
                   ),
                 ],
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LocationPolicyNotice extends StatelessWidget {
+  const _LocationPolicyNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF7EE),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFBBE5C7)),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.verified_user_rounded, color: Color(0xFF15803D)),
+          SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Marcación autorizada sin validación de ubicación.',
+              style: TextStyle(
+                color: Color(0xFF166534),
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],

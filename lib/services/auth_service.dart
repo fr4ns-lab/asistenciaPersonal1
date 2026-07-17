@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:asistenciapersonal1/models/api_auth_response.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/api_config.dart';
 import 'package:asistenciapersonal1/services/token_storage.dart';
@@ -30,10 +31,15 @@ enum ApiSessionStatus {
 }
 
 class ApiSessionState {
-  const ApiSessionState(this.status, {this.message});
+  const ApiSessionState(
+    this.status, {
+    this.message,
+    this.geolocationRequired = true,
+  });
 
   final ApiSessionStatus status;
   final String? message;
+  final bool geolocationRequired;
 }
 
 class ApiOfflineException implements Exception {
@@ -299,7 +305,11 @@ class AuthService {
 
     try {
       await getApiAccessToken(forceRefresh: false);
-      return const ApiSessionState(ApiSessionStatus.authenticated);
+      final geolocationRequired = await _tokenStorage.readGeolocationRequired();
+      return ApiSessionState(
+        ApiSessionStatus.authenticated,
+        geolocationRequired: geolocationRequired,
+      );
     } on ApiOfflineException {
       return ApiSessionState(
         ApiSessionStatus.offline,
@@ -359,6 +369,10 @@ class AuthService {
         _tokenRenewal = null;
       }
     }
+  }
+
+  Future<bool> isGeolocationRequired() {
+    return _tokenStorage.readGeolocationRequired();
   }
 
   Future<String> _renewApiToken({required bool forceFirebaseRefresh}) async {
@@ -530,9 +544,10 @@ class AuthService {
       /*
      * Obtiene el access_token propio de tu API Django.
      */
-      final accessTokenValue = decodedResponse['access_token'];
+      final apiAuthResponse = ApiAuthResponse.fromJson(decodedResponse);
+      final accessTokenValue = apiAuthResponse.accessToken;
 
-      if (accessTokenValue is! String || accessTokenValue.trim().isEmpty) {
+      if (accessTokenValue.trim().isEmpty) {
         throw const ApiAuthenticationException(
           AppException(
             code: 'AUTH-NO-TOKEN',
@@ -549,7 +564,10 @@ class AuthService {
       /*
      * Guarda el token de sesión emitido por Django.
      */
-      await _tokenStorage.saveAccessToken(accessToken);
+      await _tokenStorage.saveApiSession(
+        accessToken: accessToken,
+        geolocationRequired: apiAuthResponse.geolocationRequired,
+      );
 
       if (kDebugMode) {
         debugPrint('Sesión de API creada y access_token guardado.');
