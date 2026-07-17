@@ -22,11 +22,35 @@
           }
         },
         {
+          "client_id": "125091434839-80pra8151qghmo6gruh0ngqnd74k3oc3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lasalle.asistenciapersonal1",
+            "certificate_hash": "73ba0039251adaf698e14d007e949a20a19ced03"
+          }
+        },
+        {
+          "client_id": "125091434839-c81vu90lmgaf02q197iuhaku3c2k9lc3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lasalle.asistenciapersonal1",
+            "certificate_hash": "143024874050abda73f1b8345326d26e850622aa"
+          }
+        },
+        {
           "client_id": "125091434839-i1soqlq22g7kq4qfggka7ls1jjp7283n.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.lasalle.asistenciapersonal1",
             "certificate_hash": "cfc132099e4c393ee61d94457f57201fe19b1dcf"
+          }
+        },
+        {
+          "client_id": "125091434839-m52tjooft3hadjp8leut987b92ddmr38.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lasalle.asistenciapersonal1",
+            "certificate_hash": "3eea341e0dde3c4a4128c085617323afa64995bb"
           }
         },
         {

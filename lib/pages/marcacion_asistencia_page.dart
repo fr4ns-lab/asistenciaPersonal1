@@ -4,7 +4,11 @@ import 'dart:math' as Math;
 import 'package:asistenciapersonal1/models/last_transaction.dart';
 import 'package:asistenciapersonal1/models/transaction_request.dart';
 import 'package:asistenciapersonal1/services/auth_service.dart';
+import 'package:asistenciapersonal1/services/api_config.dart';
+import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/transaction_api.dart';
+import 'package:asistenciapersonal1/utils/lima_time.dart';
+import 'package:asistenciapersonal1/services/dashboard_refresh_notifier.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -25,6 +29,8 @@ class MarcacionAsistenciaPage extends StatefulWidget {
 class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     with WidgetsBindingObserver {
   bool _gpsActivo = true;
+  bool _geolocationRequired = true;
+  bool _loadingGeolocationPolicy = true;
   Duration _serverOffset = Duration.zero;
   DateTime? _lastNtpSyncAt;
   bool _ntpInitialized = false;
@@ -48,7 +54,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
   DateTime? _lastMarkTime;
 
   Timer? _clockTimer;
-  DateTime _now = DateTime.now();
+  DateTime _now = LimaTime.now();
 
   bool _appBloqueada = false;
   String _mensajeBloqueo = '';
@@ -72,12 +78,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _cargarInfoVersionYEscucharEstado();
-    _api = TransactionApi(baseUrl: 'https://apiasistencia.lasalle.edu.pe');
-
-    _validarServiciosRequeridos();
-    _servicesTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      _validarServiciosRequeridos();
-    });
+    _api = TransactionApi(baseUrl: ApiConfig.baseUrl);
 
     _startClock();
     _initUserData().then((_) async {
@@ -85,7 +86,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
         await _refreshLastMark();
       }
     });
-    _initLocationTracking();
+    _initializeGeolocationPolicy();
   }
 
   @override
@@ -100,19 +101,52 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     super.dispose();
   }
 
-  bool _serviciosOk() => _gpsActivo && _internetActivo;
+  bool _serviciosOk() =>
+      _internetActivo && (!_geolocationRequired || _gpsActivo);
 
   String _mensajeServicios() {
-    if (!_gpsActivo && !_internetActivo) {
+    if (_geolocationRequired && !_gpsActivo && !_internetActivo) {
       return 'Debes activar el GPS y conectarte a Internet para usar la aplicación.';
     }
-    if (!_gpsActivo) {
+    if (_geolocationRequired && !_gpsActivo) {
       return 'Debes activar el GPS para usar la aplicación.';
     }
     if (!_internetActivo) {
       return 'Debes conectarte a Internet para usar la aplicación.';
     }
     return '';
+  }
+
+  Future<void> _initializeGeolocationPolicy() async {
+    var geolocationRequired = true;
+    try {
+      geolocationRequired = await AuthService.instance.isGeolocationRequired();
+    } catch (error) {
+      debugPrint('No se pudo restaurar la política de ubicación: $error');
+    }
+    if (!mounted) return;
+
+    setState(() {
+      _geolocationRequired = geolocationRequired;
+      _loadingGeolocationPolicy = false;
+    });
+
+    await _validarServiciosRequeridos();
+    if (!mounted) return;
+
+    if (_geolocationRequired) {
+      try {
+        await _initLocationTracking();
+      } catch (error) {
+        debugPrint('Error al iniciar la validación de ubicación: $error');
+      }
+    }
+
+    if (!mounted) return;
+
+    _servicesTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      _validarServiciosRequeridos();
+    });
   }
 
   String _userDocIdFromEmail(String email) {
@@ -138,8 +172,11 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
   }
 
   Future<void> _validarServiciosRequeridos() async {
-    final gpsActivo = await Geolocator.isLocationServiceEnabled();
     final internetActivo = await _hasInternetConnection();
+    final gpsActivo =
+        _geolocationRequired
+            ? await Geolocator.isLocationServiceEnabled()
+            : true;
 
     if (!mounted) return;
 
@@ -316,6 +353,123 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     );
   }
 
+  Future<void> _showMarkErrorPopup(String message) async {
+    if (!mounted) return;
+
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'markError',
+      barrierColor: Colors.black.withValues(alpha: 0.50),
+      transitionDuration: const Duration(milliseconds: 260),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return SafeArea(
+          child: Center(
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.86,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 28,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFB91C1C),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x55000000),
+                      blurRadius: 24,
+                      offset: Offset(0, 12),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 96,
+                      height: 96,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.14),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.32),
+                          width: 2,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.error_outline_rounded,
+                        size: 62,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    const Text(
+                      'No se pudo registrar',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 27,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      message,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context, rootNavigator: true).pop();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: const Color(0xFFB91C1C),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        icon: const Icon(Icons.close_rounded),
+                        label: const Text(
+                          'Entendido',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutBack,
+        );
+        return Transform.scale(
+          scale: curved.value,
+          child: Opacity(opacity: animation.value, child: child),
+        );
+      },
+    );
+  }
+
   Future<void> _notifyPerimeterChange(bool inside) async {
     try {
       if (inside) {
@@ -422,8 +576,8 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
 
   Future<void> _syncTimeFromNTP({bool silent = false}) async {
     try {
-      final ntpNow = await NTP.now();
-      final deviceNow = DateTime.now();
+      final ntpNow = LimaTime.fromInstant(await NTP.now());
+      final deviceNow = LimaTime.now();
 
       if (!mounted) return;
 
@@ -444,7 +598,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
         if (!_ntpInitialized) {
           _timeSynced = false;
         }
-        _now = DateTime.now().add(_serverOffset);
+        _now = LimaTime.now().add(_serverOffset);
       });
 
       if (!silent) {
@@ -467,7 +621,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
       if (!mounted) return;
 
       setState(() {
-        _now = DateTime.now().add(_serverOffset);
+        _now = LimaTime.now().add(_serverOffset);
       });
 
       final shouldResync =
@@ -485,6 +639,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     if (state == AppLifecycleState.resumed) {
       Future.microtask(() async {
         if (!mounted) return;
+        if (_loadingGeolocationPolicy) return;
 
         await _validarServiciosRequeridos();
 
@@ -493,10 +648,12 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
 
         if (!mounted) return;
 
-        try {
-          await _locateAndCheck();
-        } catch (e) {
-          debugPrint('Error al reanudar ubicación: $e');
+        if (_geolocationRequired) {
+          try {
+            await _locateAndCheck();
+          } catch (e) {
+            debugPrint('Error al reanudar ubicación: $e');
+          }
         }
       });
     }
@@ -872,15 +1029,15 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
 
   Future<void> _enviarMarcacionBiotime({
     required String empCode,
-    required double lat,
-    required double lng,
+    double? lat,
+    double? lng,
   }) async {
     final tx = TransactionRequest(
       empCode: empCode,
       punchTime: null,
       longitude: lng,
       latitude: lat,
-      gpsLocation: 'Lat: $lat, Lng: $lng',
+      gpsLocation: lat != null && lng != null ? 'Lat: $lat, Lng: $lng' : null,
       mobile: null,
     );
 
@@ -901,12 +1058,8 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
   }
 
   Future<void> _handleMark() async {
-    if (!_serviciosOk()) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(_mensajeServicios())));
-      }
+    if (_geolocationRequired && !_serviciosOk()) {
+      await _showMarkErrorPopup(_mensajeServicios());
       return;
     }
 
@@ -915,40 +1068,24 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
       return;
     }
     if (!_timeSynced) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No se puede marcar sin sincronizar la hora NTP.'),
-          ),
-        );
-      }
+      await _showMarkErrorPopup(
+        'No se puede marcar sin sincronizar la hora del servidor.',
+      );
       return;
     }
 
     final user = _auth.currentUser;
     if (user == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'No hay sesión activa. Vuelve a iniciar sesión con tu cuenta institucional.',
-            ),
-          ),
-        );
-      }
+      await _showMarkErrorPopup(
+        'No hay sesión activa. Vuelve a iniciar sesión con tu cuenta institucional.',
+      );
       return;
     }
 
     if (_dni == null || _dni!.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Tu cuenta no tiene DNI asociado. Comunícate con el administrador.',
-            ),
-          ),
-        );
-      }
+      await _showMarkErrorPopup(
+        'Tu cuenta no tiene DNI asociado. Comunícate con el administrador.',
+      );
       return;
     }
 
@@ -957,81 +1094,77 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     });
 
     try {
-      await _locateAndCheck();
+      double? latitude;
+      double? longitude;
 
-      final pos = _position;
-      final isInside = _inside ?? false;
-      final maxAllowed = _accuracyMax ?? _maxAcceptedAccuracyFallback;
-      final now = DateTime.now();
-      final isRecentFix =
-          _lastAcceptedFixTime != null &&
-          now.difference(_lastAcceptedFixTime!).inSeconds <= 15;
+      if (_geolocationRequired) {
+        await _locateAndCheck();
 
-      if (!isRecentFix) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Tu ubicación no está actualizada. Espera unos segundos o pulsa actualizar ubicación.',
-            ),
-          ),
-        );
-        return;
-      }
+        final pos = _position;
+        final isInside = _inside ?? false;
+        final maxAllowed = _accuracyMax ?? _maxAcceptedAccuracyFallback;
+        final now = DateTime.now();
+        final isRecentFix =
+            _lastAcceptedFixTime != null &&
+            now.difference(_lastAcceptedFixTime!).inSeconds <= 15;
 
-      if (pos == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No se pudo obtener tu ubicación actual.'),
-          ),
-        );
-        return;
-      }
-
-      if (pos.accuracy > maxAllowed) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-            content: Text(
-              'La ubicación aún no es suficientemente precisa (${pos.accuracy.toStringAsFixed(1)} m). Intenta nuevamente en unos segundos.',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-        );
-        return;
-      }
-
-      if (pos == null || !isInside) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Estás fuera del área permitida.\n'
-                'Distancia aprox. al perímetro: '
-                '${_distanceToCenter?.toStringAsFixed(1) ?? '-'} m',
-              ),
-            ),
+        if (!isRecentFix) {
+          await _showMarkErrorPopup(
+            'Tu ubicación no está actualizada. Espera unos segundos o pulsa actualizar ubicación.',
           );
+          return;
         }
-        return;
+
+        if (pos == null) {
+          await _showMarkErrorPopup('No se pudo obtener tu ubicación actual.');
+          return;
+        }
+
+        if (pos.accuracy > maxAllowed) {
+          await _showMarkErrorPopup(
+            'La ubicación aún no es suficientemente precisa (${pos.accuracy.toStringAsFixed(1)} m). Intenta nuevamente en unos segundos.',
+          );
+          return;
+        }
+
+        if (!isInside) {
+          await _showMarkErrorPopup(
+            'Estás fuera del área permitida.\n'
+            'Distancia aprox. al perímetro: '
+            '${_distanceToCenter?.toStringAsFixed(1) ?? '-'} m',
+          );
+          return;
+        }
+
+        latitude = pos.latitude;
+        longitude = pos.longitude;
       }
 
       await _enviarMarcacionBiotime(
         empCode: _dni!,
-        lat: pos.latitude,
-        lng: pos.longitude,
+        lat: latitude,
+        lng: longitude,
       );
 
       await _refreshLastMark();
+
+      DashboardRefreshNotifier.instance.notifyCheckInRegistered();
 
       if (!mounted) return;
 
       await _showSuccessPopup();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al registrar la marcación: $e')),
-      );
+      debugPrint('Error técnico al registrar la marcación: $e');
+      final message =
+          e is AppException
+              ? e.userMessage
+              : const AppException(
+                code: 'MARK-001',
+                message:
+                    'No pudimos registrar tu marcación. Inténtalo nuevamente.',
+              ).userMessage;
+      await _showMarkErrorPopup(message);
     } finally {
       if (mounted) {
         setState(() {
@@ -1160,6 +1293,16 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     final pos = _position;
 
     final statusColor = _statusColor(context);
+    final locationReady = !_geolocationRequired || _inside == true;
+    final servicesReady =
+        !_geolocationRequired || (_serviciosOk() && !_validandoServicios);
+    final canMark =
+        !_loading &&
+        !_loadingGeolocationPolicy &&
+        _timeSynced &&
+        locationReady &&
+        !_appBloqueada &&
+        servicesReady;
 
     return Scaffold(
       // floatingActionButton: FloatingActionButton(
@@ -1408,31 +1551,34 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
                           ),
                         ),
                         const SizedBox(height: 18),
-                        AnimatedScale(
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOut,
-                          scale: _inside == null ? 1.0 : 1.015,
-                          child: AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 260),
-                            switchInCurve: Curves.easeOut,
-                            switchOutCurve: Curves.easeOut,
-                            child: _StatusLocationCard(
-                              key: ValueKey(_inside),
-                              color: statusColor,
-                              icon: _statusIcon(),
-                              title: _locationStatusTitle(),
-                              badge:
-                                  pos != null
-                                      ? 'GPS ±${pos.accuracy.toStringAsFixed(0)} m'
-                                      : 'GPS --',
-                              subtitle: _locationStatusSubtitle(),
-                              progress: _locationProgressValue(),
-                              onRefresh: _locateAndCheck,
-                              helperText:
-                                  'Uso de emergencia: actualiza tu ubicación si el seguimiento automático falla.',
+                        if (_geolocationRequired)
+                          AnimatedScale(
+                            duration: const Duration(milliseconds: 220),
+                            curve: Curves.easeOut,
+                            scale: _inside == null ? 1.0 : 1.015,
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 260),
+                              switchInCurve: Curves.easeOut,
+                              switchOutCurve: Curves.easeOut,
+                              child: _StatusLocationCard(
+                                key: ValueKey(_inside),
+                                color: statusColor,
+                                icon: _statusIcon(),
+                                title: _locationStatusTitle(),
+                                badge:
+                                    pos != null
+                                        ? 'GPS ±${pos.accuracy.toStringAsFixed(0)} m'
+                                        : 'GPS --',
+                                subtitle: _locationStatusSubtitle(),
+                                progress: _locationProgressValue(),
+                                onRefresh: _locateAndCheck,
+                                helperText:
+                                    'Uso de emergencia: actualiza tu ubicación si el seguimiento automático falla.',
+                              ),
                             ),
-                          ),
-                        ),
+                          )
+                        else
+                          const _LocationPolicyNotice(),
                         const SizedBox(height: 18),
                         _PreviousCheckCard(
                           lastMarkTime: _lastMarkTime,
@@ -1443,24 +1589,16 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
                         // _NextMarkCard(nextType: _friendlyNextType(nextType)),
                         const SizedBox(height: 28),
                         ElevatedButton(
-                          onPressed:
-                              (_loading ||
-                                      !_timeSynced ||
-                                      _inside != true ||
-                                      _appBloqueada ||
-                                      !_serviciosOk() ||
-                                      _validandoServicios)
-                                  ? null
-                                  : _handleMark,
+                          onPressed: canMark ? _handleMark : null,
                           style: ElevatedButton.styleFrom(
                             backgroundColor:
-                                _inside == true
+                                canMark
                                     ? const Color(0xFF2563EB)
                                     : const Color(0xFF94A3B8),
                             disabledBackgroundColor: const Color(0xFFCBD5E1),
                             foregroundColor: Colors.white,
                             disabledForegroundColor: Colors.white70,
-                            elevation: _inside == true ? 8 : 0,
+                            elevation: canMark ? 8 : 0,
                             shadowColor: const Color(0x552563EB),
                             padding: const EdgeInsets.symmetric(vertical: 18),
                             shape: RoundedRectangleBorder(
@@ -1483,7 +1621,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
                                 )
                               else
                                 Icon(
-                                  _inside == true
+                                  locationReady
                                       ? Icons.fingerprint_rounded
                                       : Icons.location_off_rounded,
                                   size: 26,
@@ -1493,7 +1631,7 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
                                 child: Text(
                                   _loading
                                       ? 'Registrando...'
-                                      : (_inside == true
+                                      : (locationReady
                                           ? 'Registrar marcación'
                                           : 'Fuera del perímetro'),
                                   overflow: TextOverflow.ellipsis,
@@ -1510,13 +1648,15 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
                         Text(
                           !_timeSynced
                               ? 'No se puede marcar mientras no se sincronice la hora del servidor.'
-                              : (_inside == true
-                                  ? 'Tu ubicación es válida. Ya puedes realizar la marcación.'
-                                  : 'Estás fuera del perímetro permitido. El botón de marcación está deshabilitado hasta que vuelvas a ingresar.'),
+                              : (!_geolocationRequired
+                                  ? 'Marcación autorizada sin validación de ubicación.'
+                                  : (_inside == true
+                                      ? 'Tu ubicación es válida. Ya puedes realizar la marcación.'
+                                      : 'Estás fuera del perímetro permitido. El botón de marcación está deshabilitado hasta que vuelvas a ingresar.')),
                           textAlign: TextAlign.center,
                           style: theme.textTheme.bodySmall?.copyWith(
                             color:
-                                _inside == true
+                                locationReady
                                     ? const Color(0xFF64748B)
                                     : const Color(0xFFDC2626),
                             fontWeight: FontWeight.w700,
@@ -1576,7 +1716,8 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
               ],
             ),
           ),
-          if (_appBloqueada || (!_validandoServicios && !_serviciosOk()))
+          if (_appBloqueada ||
+              (_geolocationRequired && !_validandoServicios && !_serviciosOk()))
             Positioned.fill(
               child: AbsorbPointer(
                 child: Container(color: Colors.black.withOpacity(0.12)),
@@ -1723,6 +1864,39 @@ class _ProfileCard extends StatelessWidget {
                   ),
                 ],
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LocationPolicyNotice extends StatelessWidget {
+  const _LocationPolicyNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF7EE),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFBBE5C7)),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.verified_user_rounded, color: Color(0xFF15803D)),
+          SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Marcación autorizada sin validación de ubicación.',
+              style: TextStyle(
+                color: Color(0xFF166534),
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],

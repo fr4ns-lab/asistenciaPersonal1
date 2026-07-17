@@ -18,24 +18,7 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _handleGoogleSignIn() async {
     setState(() => _loading = true);
 
-    final result = await AuthService.instance.signInWithGoogle(context);
-
-    if (result != null) {
-      final allowed = await AuthService.instance.verifyAccessForUser(
-        context,
-        result.user,
-      );
-
-      if (allowed && mounted) {
-        setState(() {
-          _name = result.user.displayName;
-          _email = result.user.email;
-          _photo = result.resolvedPhotoUrl; // <- aquí queda la foto
-        });
-
-        Navigator.of(context).pushReplacementNamed('/asistencia');
-      }
-    }
+    await AuthService.instance.signInWithGoogle(context);
 
     if (mounted) {
       setState(() => _loading = false);
