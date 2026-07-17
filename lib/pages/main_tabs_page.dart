@@ -63,7 +63,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                   index: 0,
                   activeIcon: Icons.location_on_rounded,
                   inactiveIcon: Icons.location_on_outlined,
-                  label: 'Registrar',
+                  label: 'Registro',
                 ),
                 _buildNavItem(
                   index: 1,
@@ -108,7 +108,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
             AnimatedContainer(
               duration: const Duration(milliseconds: 280),
               curve: Curves.fastOutSlowIn,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
                 color:
                     isSelected
@@ -136,7 +136,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                             style: TextStyle(
                               color: primaryColor,
                               fontWeight: FontWeight.w800,
-                              fontSize: 13,
+                              fontSize: 12,
                               letterSpacing: -0.2,
                             ),
                           ),
