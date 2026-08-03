@@ -27,18 +27,28 @@ class _RootPageState extends State<RootPage> {
   }
 
   void _prepareUser(BuildContext context, User user) {
-    if (_sessionUid == user.uid && _accessFuture != null) return;
+    if (_sessionUid == user.uid && _sessionFuture != null) return;
     _sessionUid = user.uid;
-    _accessFuture = AuthService.instance.verifyAccessForUser(context, user);
-    _sessionFuture = null;
+    _accessFuture = null;
+    _sessionFuture = AuthService.instance.restoreApiSession();
   }
 
-  void _prepareApiSession() {
-    _sessionFuture ??= AuthService.instance.restoreApiSession();
+  void _prepareDeviceValidation(
+    BuildContext context,
+    User user,
+    bool deviceValidationRequired,
+  ) {
+    if (_accessFuture != null) return;
+
+    _accessFuture =
+        deviceValidationRequired
+            ? AuthService.instance.verifyAccessForUser(context, user)
+            : Future<bool>.value(true);
   }
 
   void _retrySession() {
     setState(() {
+      _accessFuture = null;
       _sessionFuture = AuthService.instance.restoreApiSession();
     });
   }
@@ -64,59 +74,63 @@ class _RootPageState extends State<RootPage> {
         }
 
         _prepareUser(context, user);
-        return FutureBuilder<bool>(
-          future: _accessFuture,
-          builder: (context, accessSnapshot) {
-            if (accessSnapshot.connectionState != ConnectionState.done) {
+        return FutureBuilder<ApiSessionState>(
+          future: _sessionFuture,
+          builder: (context, sessionSnapshot) {
+            if (sessionSnapshot.connectionState != ConnectionState.done) {
               return _loadingSession();
             }
 
-            if (!(accessSnapshot.data ?? false)) {
+            final sessionState =
+                sessionSnapshot.data ??
+                const ApiSessionState(ApiSessionStatus.unauthenticated);
+            final status = sessionState.status;
+            if (status == ApiSessionStatus.offline) {
+              return _sessionMessage(
+                icon: Icons.cloud_off_rounded,
+                title: 'Servidor no disponible',
+                message:
+                    sessionState.message ??
+                    'No se pudo validar la sesión con el servidor de asistencia. Revisa tu conexión o inténtalo cuando la API esté disponible.',
+                retry: true,
+              );
+            }
+            if (status == ApiSessionStatus.unauthorized) {
+              return _sessionMessage(
+                icon: Icons.person_off_rounded,
+                title: 'Acceso no autorizado',
+                message:
+                    sessionState.message ??
+                    'Tu usuario no está autorizado o fue desactivado. Comunícate con el administrador.',
+              );
+            }
+            if (status == ApiSessionStatus.error) {
+              return _sessionMessage(
+                icon: Icons.error_outline_rounded,
+                title: 'No se pudo iniciar la sesión',
+                message:
+                    sessionState.message ??
+                    'El servidor devolvió una respuesta inesperada. Inténtalo nuevamente.',
+                retry: true,
+              );
+            }
+            if (status == ApiSessionStatus.unauthenticated) {
               return const LoginPage();
             }
 
-            _prepareApiSession();
-            return FutureBuilder<ApiSessionState>(
-              future: _sessionFuture,
-              builder: (context, sessionSnapshot) {
-                if (sessionSnapshot.connectionState != ConnectionState.done) {
+            _prepareDeviceValidation(
+              context,
+              user,
+              sessionState.deviceValidationRequired,
+            );
+            return FutureBuilder<bool>(
+              future: _accessFuture,
+              builder: (context, accessSnapshot) {
+                if (accessSnapshot.connectionState != ConnectionState.done) {
                   return _loadingSession();
                 }
 
-                final sessionState =
-                    sessionSnapshot.data ??
-                    const ApiSessionState(ApiSessionStatus.unauthenticated);
-                final status = sessionState.status;
-                if (status == ApiSessionStatus.offline) {
-                  return _sessionMessage(
-                    icon: Icons.cloud_off_rounded,
-                    title: 'Servidor no disponible',
-                    message:
-                        sessionState.message ??
-                        'No se pudo validar la sesión con el servidor de asistencia. Revisa tu conexión o inténtalo cuando la API esté disponible.',
-                    retry: true,
-                  );
-                }
-                if (status == ApiSessionStatus.unauthorized) {
-                  return _sessionMessage(
-                    icon: Icons.person_off_rounded,
-                    title: 'Acceso no autorizado',
-                    message:
-                        sessionState.message ??
-                        'Tu usuario no está autorizado o fue desactivado. Comunícate con el administrador.',
-                  );
-                }
-                if (status == ApiSessionStatus.error) {
-                  return _sessionMessage(
-                    icon: Icons.error_outline_rounded,
-                    title: 'No se pudo iniciar la sesión',
-                    message:
-                        sessionState.message ??
-                        'El servidor devolvió una respuesta inesperada. Inténtalo nuevamente.',
-                    retry: true,
-                  );
-                }
-                if (status == ApiSessionStatus.unauthenticated) {
+                if (!(accessSnapshot.data ?? false)) {
                   return const LoginPage();
                 }
 

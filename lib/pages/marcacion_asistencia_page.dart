@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:io' show InternetAddress, Platform;
 import 'dart:math' as Math;
-import 'package:asistenciapersonal1/models/last_transaction.dart';
 import 'package:asistenciapersonal1/models/transaction_request.dart';
 import 'package:asistenciapersonal1/services/auth_service.dart';
 import 'package:asistenciapersonal1/services/api_config.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
+import 'package:asistenciapersonal1/services/dashboard_service.dart';
 import 'package:asistenciapersonal1/services/transaction_api.dart';
 import 'package:asistenciapersonal1/utils/lima_time.dart';
 import 'package:asistenciapersonal1/services/dashboard_refresh_notifier.dart';
@@ -73,19 +73,18 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
   StreamSubscription<Position>? _posSub;
 
   late final TransactionApi _api;
+  late final DashboardApiService _dashboardApi;
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _cargarInfoVersionYEscucharEstado();
     _api = TransactionApi(baseUrl: ApiConfig.baseUrl);
+    _dashboardApi = DashboardApiService(baseUrl: ApiConfig.baseUrl);
 
     _startClock();
-    _initUserData().then((_) async {
-      if (_dni != null && _dni!.isNotEmpty) {
-        await _refreshLastMark();
-      }
-    });
+    _initUserData();
+    _refreshLastMark();
     _initializeGeolocationPolicy();
   }
 
@@ -159,15 +158,6 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
       return result.isNotEmpty && result.first.rawAddress.isNotEmpty;
     } catch (_) {
       return false;
-    }
-  }
-
-  Future<LastTransaction> getLastTransaction(String empCode) async {
-    try {
-      return await _api.getLastTransaction(empCode);
-    } catch (e) {
-      debugPrint('Error al obtener última transacción: $e');
-      rethrow;
     }
   }
 
@@ -1046,15 +1036,49 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
 
   Future<void> _refreshLastMark() async {
     try {
-      final lastTx = await getLastTransaction(_dni!);
+      final dashboard = await _dashboardApi.getMyDashboard(month: LimaTime.now());
+      final lastMarkTime = _latestCheckinTime(
+        dashboard.recentCheckins
+            .map((item) => (date: item.punchDate, time: item.punchTime)),
+      );
       if (!mounted) return;
 
       setState(() {
-        _lastMarkTime = lastTx.data.punchTime;
+        _lastMarkTime = lastMarkTime;
       });
     } catch (e) {
       debugPrint("Error refrescando última marcación: $e");
     }
+  }
+
+  DateTime? _latestCheckinTime(Iterable<({String date, String time})> checkins) {
+    DateTime? latest;
+    for (final checkin in checkins) {
+      final parsed = _parseDashboardCheckinTime(checkin.date, checkin.time);
+      if (parsed != null && (latest == null || parsed.isAfter(latest))) {
+        latest = parsed;
+      }
+    }
+    return latest;
+  }
+
+  DateTime? _parseDashboardCheckinTime(String date, String time) {
+    final dateMatch = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(
+      date.trim(),
+    );
+    final timeMatch = RegExp(r'^(\d{1,2}):(\d{2})(?::(\d{2}))?$').firstMatch(
+      time.trim(),
+    );
+    if (dateMatch == null || timeMatch == null) return null;
+
+    return DateTime(
+      int.parse(dateMatch.group(1)!),
+      int.parse(dateMatch.group(2)!),
+      int.parse(dateMatch.group(3)!),
+      int.parse(timeMatch.group(1)!),
+      int.parse(timeMatch.group(2)!),
+      int.parse(timeMatch.group(3) ?? '0'),
+    );
   }
 
   Future<void> _handleMark() async {

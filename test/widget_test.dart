@@ -15,6 +15,7 @@ void main() {
       final response = ApiAuthResponse.fromJson({'access_token': 'jwt'});
 
       expect(response.geolocationRequired, isTrue);
+      expect(response.deviceValidationRequired, isTrue);
     });
 
     test('respeta la política de geolocalización entregada por el API', () {
@@ -24,6 +25,15 @@ void main() {
       });
 
       expect(response.geolocationRequired, isFalse);
+    });
+
+    test('respeta la política de validación de dispositivo del API', () {
+      final response = ApiAuthResponse.fromJson({
+        'access_token': 'jwt',
+        'device_validation_required': false,
+      });
+
+      expect(response.deviceValidationRequired, isFalse);
     });
   });
 

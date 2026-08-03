@@ -35,11 +35,13 @@ class ApiSessionState {
     this.status, {
     this.message,
     this.geolocationRequired = true,
+    this.deviceValidationRequired = true,
   });
 
   final ApiSessionStatus status;
   final String? message;
   final bool geolocationRequired;
+  final bool deviceValidationRequired;
 }
 
 class ApiOfflineException implements Exception {
@@ -306,9 +308,12 @@ class AuthService {
     try {
       await getApiAccessToken(forceRefresh: false);
       final geolocationRequired = await _tokenStorage.readGeolocationRequired();
+      final deviceValidationRequired =
+          await _tokenStorage.readDeviceValidationRequired();
       return ApiSessionState(
         ApiSessionStatus.authenticated,
         geolocationRequired: geolocationRequired,
+        deviceValidationRequired: deviceValidationRequired,
       );
     } on ApiOfflineException {
       return ApiSessionState(
@@ -373,6 +378,10 @@ class AuthService {
 
   Future<bool> isGeolocationRequired() {
     return _tokenStorage.readGeolocationRequired();
+  }
+
+  Future<bool> isDeviceValidationRequired() {
+    return _tokenStorage.readDeviceValidationRequired();
   }
 
   Future<String> _renewApiToken({required bool forceFirebaseRefresh}) async {
@@ -567,6 +576,7 @@ class AuthService {
       await _tokenStorage.saveApiSession(
         accessToken: accessToken,
         geolocationRequired: apiAuthResponse.geolocationRequired,
+        deviceValidationRequired: apiAuthResponse.deviceValidationRequired,
       );
 
       if (kDebugMode) {
