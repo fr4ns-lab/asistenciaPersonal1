@@ -152,7 +152,10 @@ class _RootPageState extends State<RootPage> {
                       );
                     }
 
-                    return const MainTabsPage();
+                    return MainTabsPage(
+                      manageDeviceAuthorizations:
+                          sessionState.manageDeviceAuthorizations,
+                    );
                   },
                 );
               },

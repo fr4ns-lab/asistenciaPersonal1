@@ -9,7 +9,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -36,12 +35,14 @@ class ApiSessionState {
     this.message,
     this.geolocationRequired = true,
     this.deviceValidationRequired = true,
+    this.manageDeviceAuthorizations = false,
   });
 
   final ApiSessionStatus status;
   final String? message;
   final bool geolocationRequired;
   final bool deviceValidationRequired;
+  final bool manageDeviceAuthorizations;
 }
 
 class ApiOfflineException implements Exception {
@@ -236,10 +237,12 @@ class AuthService {
         try {
           await _googleSignIn.disconnect();
         } catch (_) {}
-        _showSnack(
-          context,
-          'Solo se permite el ingreso con correos institucionales.',
-        );
+        if (context.mounted) {
+          _showSnack(
+            context,
+            'Solo se permite el ingreso con correos institucionales.',
+          );
+        }
         return null;
       }
 
@@ -264,20 +267,22 @@ class AuthService {
         'email': email,
         'name': firebaseUser.displayName ?? googleUser.displayName,
         'photoUrl': resolvedPhoto,
-        'firebaseUid': firebaseUser.uid,
+        'firebase_uid': firebaseUser.uid,
         'lastLogin': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
       return AuthResult(user: firebaseUser, resolvedPhotoUrl: resolvedPhoto);
     } catch (e) {
       debugPrint('Error al iniciar sesión: $e');
-      _showSnack(
-        context,
-        const AppException(
-          code: 'AUTH-LOGIN',
-          message: 'No pudimos iniciar sesión. Inténtalo nuevamente.',
-        ).userMessage,
-      );
+      if (context.mounted) {
+        _showSnack(
+          context,
+          const AppException(
+            code: 'AUTH-LOGIN',
+            message: 'No pudimos iniciar sesión. Inténtalo nuevamente.',
+          ).userMessage,
+        );
+      }
       return null;
     }
   }
@@ -287,13 +292,15 @@ class AuthService {
       await _clearAllSessions();
     } catch (e) {
       debugPrint('Error al cerrar sesión: $e');
-      _showSnack(
-        context,
-        const AppException(
-          code: 'AUTH-SIGNOUT',
-          message: 'No pudimos cerrar sesión correctamente.',
-        ).userMessage,
-      );
+      if (context.mounted) {
+        _showSnack(
+          context,
+          const AppException(
+            code: 'AUTH-SIGNOUT',
+            message: 'No pudimos cerrar sesión correctamente.',
+          ).userMessage,
+        );
+      }
     }
   }
 
@@ -306,14 +313,19 @@ class AuthService {
     }
 
     try {
-      await getApiAccessToken(forceRefresh: false);
+      // También refresca las políticas entregadas por el backend, incluidos
+      // permisos administrativos que pueden haber cambiado en SQL.
+      await getApiAccessToken(forceRefresh: true);
       final geolocationRequired = await _tokenStorage.readGeolocationRequired();
       final deviceValidationRequired =
           await _tokenStorage.readDeviceValidationRequired();
+      final manageDeviceAuthorizations =
+          await _tokenStorage.readManageDeviceAuthorizations();
       return ApiSessionState(
         ApiSessionStatus.authenticated,
         geolocationRequired: geolocationRequired,
         deviceValidationRequired: deviceValidationRequired,
+        manageDeviceAuthorizations: manageDeviceAuthorizations,
       );
     } on ApiOfflineException {
       return ApiSessionState(
@@ -384,6 +396,10 @@ class AuthService {
     return _tokenStorage.readDeviceValidationRequired();
   }
 
+  Future<bool> canManageDeviceAuthorizations() {
+    return _tokenStorage.readManageDeviceAuthorizations();
+  }
+
   Future<String> _renewApiToken({required bool forceFirebaseRefresh}) async {
     final user = _auth.currentUser;
 
@@ -409,27 +425,7 @@ class AuthService {
 
       final firebaseIdToken = rawFirebaseIdToken.trim();
 
-      /*
-     * Solo durante desarrollo:
-     * copia el token completo al portapapeles para usarlo en Postman.
-     */
       if (kDebugMode) {
-        try {
-          await Clipboard.setData(ClipboardData(text: firebaseIdToken));
-
-          debugPrint('==========================================');
-          debugPrint('FIREBASE ID TOKEN COPIADO AL PORTAPAPELES');
-          debugPrint('Longitud: ${firebaseIdToken.length}');
-          debugPrint('Partes JWT: ${firebaseIdToken.split('.').length}');
-          debugPrint('==========================================');
-        } catch (e) {
-          debugPrint('No se pudo copiar el Firebase ID Token: $e');
-        }
-
-        /*
-       * Muestra aud, iss, email y exp.
-       * No imprime nuevamente el token completo.
-       */
         _debugFirebaseTokenClaims(firebaseIdToken);
       }
 
@@ -463,7 +459,6 @@ class AuthService {
 
       if (kDebugMode) {
         debugPrint('Firebase Auth API status: ${response.statusCode}');
-        debugPrint('Firebase Auth API response: ${response.body}');
       }
 
       /*
@@ -577,6 +572,7 @@ class AuthService {
         accessToken: accessToken,
         geolocationRequired: apiAuthResponse.geolocationRequired,
         deviceValidationRequired: apiAuthResponse.deviceValidationRequired,
+        manageDeviceAuthorizations: apiAuthResponse.manageDeviceAuthorizations,
       );
 
       if (kDebugMode) {
@@ -664,6 +660,90 @@ class AuthService {
     } catch (_) {}
   }
 
+  String? _storedFirebaseUid(Map<String, dynamic>? data) {
+    final firebaseUid = data?['firebase_uid'];
+    if (firebaseUid is String && firebaseUid.trim().isNotEmpty) {
+      return firebaseUid.trim();
+    }
+
+    // Compatibilidad temporal con documentos creados por versiones anteriores.
+    final legacyFirebaseUid = data?['firebaseUid'];
+    if (legacyFirebaseUid is String && legacyFirebaseUid.trim().isNotEmpty) {
+      return legacyFirebaseUid.trim();
+    }
+    return null;
+  }
+
+  DateTime? _deviceReplacementExpiry(Map<String, dynamic>? replacement) {
+    final value = replacement?['expiresAt'];
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    if (value is String) return DateTime.tryParse(value);
+    return null;
+  }
+
+  bool _hasValidDeviceReplacement(Map<String, dynamic>? replacement) {
+    if (replacement?['allowed'] != true || replacement?['usedAt'] != null) {
+      return false;
+    }
+    final expiresAt = _deviceReplacementExpiry(replacement);
+    return expiresAt != null && expiresAt.isAfter(DateTime.now());
+  }
+
+  Future<bool> _consumeDeviceReplacement({
+    required DocumentReference<Map<String, dynamic>> userRef,
+    required User user,
+    required String deviceId,
+  }) {
+    return _db.runTransaction((transaction) async {
+      final snapshot = await transaction.get(userRef);
+      final data = snapshot.data();
+      final storedUid = _storedFirebaseUid(data);
+      final replacement = data?['deviceReplacement'];
+      final replacementMap =
+          replacement is Map
+              ? Map<String, dynamic>.from(replacement)
+              : const <String, dynamic>{};
+
+      if (!snapshot.exists ||
+          storedUid != user.uid ||
+          !_hasValidDeviceReplacement(replacementMap)) {
+        return false;
+      }
+
+      transaction.update(userRef, {
+        'deviceId': deviceId,
+        'deviceReplacement.allowed': false,
+        'deviceReplacement.usedAt': FieldValue.serverTimestamp(),
+        'firebase_uid': user.uid,
+        'lastLogin': FieldValue.serverTimestamp(),
+      });
+      return true;
+    });
+  }
+
+  Future<void> _showDeviceAccessDenied(BuildContext context) async {
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder:
+          (_) => AlertDialog(
+            title: const Text('Acceso restringido'),
+            content: const Text(
+              'Esta cuenta ya está asociada a otro dispositivo.\n\n'
+              'Para usarla en este celular o computadora, '
+              'debes comunicarte con el administrador del sistema.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Entendido'),
+              ),
+            ],
+          ),
+    );
+  }
+
   Future<bool> verifyAccessForUser(BuildContext context, User user) async {
     final deviceId = await _getDeviceId();
     final email = user.email?.trim().toLowerCase();
@@ -701,6 +781,7 @@ class AuthService {
     }
 
     final existingData = doc.data();
+    final storedFirebaseUid = _storedFirebaseUid(existingData);
     final savedDeviceIdValue = existingData?['deviceId'];
     final savedDeviceId =
         savedDeviceIdValue is String ? savedDeviceIdValue.trim() : null;
@@ -710,7 +791,7 @@ class AuthService {
             ? user.photoURL!.trim()
             : existingPhotoUrl;
 
-    if (!doc.exists || savedDeviceId == null || savedDeviceId.isEmpty) {
+    if (!doc.exists) {
       debugPrint('Registrando dispositivo para $email.');
       await docRef.set({
         'email': email,
@@ -718,11 +799,40 @@ class AuthService {
         'deviceId': deviceId,
         'dni': dni,
         'photoUrl': newPhotoUrl,
-        'firebaseUid': user.uid,
+        'firebase_uid': user.uid,
         'lastLogin': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      _showSnack(context, 'Inicio de sesión correcto.');
+      if (context.mounted) {
+        _showSnack(context, 'Inicio de sesión correcto.');
+      }
+      return true;
+    }
+
+    if (storedFirebaseUid != user.uid) {
+      debugPrint('Acceso restringido: la identidad Firebase no coincide.');
+      if (context.mounted) {
+        await _showDeviceAccessDenied(context);
+      }
+      await _clearAllSessions();
+      return false;
+    }
+
+    if (savedDeviceId == null || savedDeviceId.isEmpty) {
+      debugPrint('Registrando dispositivo inicial para $email.');
+      await docRef.set({
+        'email': email,
+        'name': user.displayName,
+        'deviceId': deviceId,
+        'dni': dni,
+        'photoUrl': newPhotoUrl,
+        'firebase_uid': user.uid,
+        'lastLogin': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (context.mounted) {
+        _showSnack(context, 'Inicio de sesión correcto.');
+      }
       return true;
     }
 
@@ -732,33 +842,27 @@ class AuthService {
         'lastLogin': FieldValue.serverTimestamp(),
         'dni': dni,
         'photoUrl': newPhotoUrl,
-        'firebaseUid': user.uid,
+        'firebase_uid': user.uid,
       });
       return true;
     }
 
-    debugPrint('Acceso restringido: $email ya tiene otro deviceId registrado.');
-    if (context.mounted) {
-      await showDialog(
-        context: context,
-        builder:
-            (_) => AlertDialog(
-              title: const Text('Acceso restringido'),
-              content: const Text(
-                'Esta cuenta ya está asociada a otro dispositivo.\n\n'
-                'Para usarla en este celular o computadora, '
-                'debes comunicarte con el administrador del sistema.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Entendido'),
-                ),
-              ],
-            ),
-      );
+    final replacementUsed = await _consumeDeviceReplacement(
+      userRef: docRef,
+      user: user,
+      deviceId: deviceId,
+    );
+    if (replacementUsed) {
+      if (context.mounted) {
+        _showSnack(context, 'Dispositivo autorizado correctamente.');
+      }
+      return true;
     }
 
+    debugPrint('Acceso restringido: dispositivo no autorizado para $email.');
+    if (context.mounted) {
+      await _showDeviceAccessDenied(context);
+    }
     await _clearAllSessions();
     return false;
   }

@@ -7,6 +7,8 @@ class TokenStorage {
   static const _accessTokenKey = 'api_access_token';
   static const _geolocationRequiredKey = 'api_geolocation_required';
   static const _deviceValidationRequiredKey = 'api_device_validation_required';
+  static const _manageDeviceAuthorizationsKey =
+      'api_manage_device_authorizations';
 
   final FlutterSecureStorage _storage;
 
@@ -20,6 +22,7 @@ class TokenStorage {
     required String accessToken,
     required bool geolocationRequired,
     required bool deviceValidationRequired,
+    required bool manageDeviceAuthorizations,
   }) async {
     await _storage.write(key: _accessTokenKey, value: accessToken);
     await _storage.write(
@@ -29,6 +32,10 @@ class TokenStorage {
     await _storage.write(
       key: _deviceValidationRequiredKey,
       value: deviceValidationRequired.toString(),
+    );
+    await _storage.write(
+      key: _manageDeviceAuthorizationsKey,
+      value: manageDeviceAuthorizations.toString(),
     );
   }
 
@@ -42,9 +49,15 @@ class TokenStorage {
     return value?.toLowerCase() == 'false' ? false : true;
   }
 
+  Future<bool> readManageDeviceAuthorizations() async {
+    final value = await _storage.read(key: _manageDeviceAuthorizationsKey);
+    return value?.toLowerCase() == 'true';
+  }
+
   Future<void> clearAccessToken() async {
     await _storage.delete(key: _accessTokenKey);
     await _storage.delete(key: _geolocationRequiredKey);
     await _storage.delete(key: _deviceValidationRequiredKey);
+    await _storage.delete(key: _manageDeviceAuthorizationsKey);
   }
 }

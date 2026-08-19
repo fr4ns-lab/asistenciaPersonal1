@@ -4,7 +4,9 @@ import 'package:asistenciapersonal1/pages/profile_page.dart';
 import 'package:flutter/material.dart';
 
 class MainTabsPage extends StatefulWidget {
-  const MainTabsPage({super.key});
+  const MainTabsPage({super.key, required this.manageDeviceAuthorizations});
+
+  final bool manageDeviceAuthorizations;
 
   @override
   State<MainTabsPage> createState() => _MainTabsPageState();
@@ -13,11 +15,19 @@ class MainTabsPage extends StatefulWidget {
 class _MainTabsPageState extends State<MainTabsPage> {
   int _index = 0;
 
-  final List<Widget> _screens = const [
-    MarcacionAsistenciaPage(),
-    DashboardScreen(),
-    ProfilePage(),
-  ];
+  late final List<Widget> _screens;
+
+  @override
+  void initState() {
+    super.initState();
+    _screens = [
+      const MarcacionAsistenciaPage(),
+      const DashboardScreen(),
+      ProfilePage(
+        manageDeviceAuthorizations: widget.manageDeviceAuthorizations,
+      ),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {

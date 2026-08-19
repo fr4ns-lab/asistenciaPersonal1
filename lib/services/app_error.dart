@@ -167,6 +167,26 @@ class AppErrors {
     );
   }
 
+  static AppException deviceRenewalFailed(int statusCode, String responseBody) {
+    final detail = _apiDetail(responseBody);
+    if (statusCode == 401) return sessionExpired();
+    if (statusCode == 403) {
+      return AppException(
+        code: 'ADMIN-DEVICE-403',
+        message: 'No tienes permisos para administrar dispositivos.',
+        technicalDetail: detail,
+      );
+    }
+    if (_isServerUnavailableStatus(statusCode)) {
+      return apiUnavailable(technicalDetail: detail);
+    }
+    return AppException(
+      code: 'ADMIN-DEVICE-$statusCode',
+      message: 'No se pudo actualizar la autorización de dispositivo.',
+      technicalDetail: detail,
+    );
+  }
+
   static bool _isServerUnavailableStatus(int statusCode) {
     return statusCode == 502 ||
         statusCode == 503 ||

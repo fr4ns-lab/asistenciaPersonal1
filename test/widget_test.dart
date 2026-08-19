@@ -1,9 +1,15 @@
+import 'dart:convert';
+
+import 'package:asistenciapersonal1/models/admin_directory_user.dart';
 import 'package:asistenciapersonal1/models/dashboard_response.dart';
 import 'package:asistenciapersonal1/models/api_auth_response.dart';
+import 'package:asistenciapersonal1/models/device_renewal.dart';
+import 'package:asistenciapersonal1/pages/device_renewal_admin_page.dart';
 import 'package:asistenciapersonal1/services/api_client.dart';
 import 'package:asistenciapersonal1/services/app_error.dart';
 import 'package:asistenciapersonal1/services/dashboard_service.dart';
 import 'package:asistenciapersonal1/services/dashboard_refresh_notifier.dart';
+import 'package:asistenciapersonal1/services/device_renewal_service.dart';
 import 'package:asistenciapersonal1/utils/lima_time.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -16,6 +22,7 @@ void main() {
 
       expect(response.geolocationRequired, isTrue);
       expect(response.deviceValidationRequired, isTrue);
+      expect(response.manageDeviceAuthorizations, isFalse);
     });
 
     test('respeta la política de geolocalización entregada por el API', () {
@@ -34,6 +41,146 @@ void main() {
       });
 
       expect(response.deviceValidationRequired, isFalse);
+    });
+
+    test('lee el permiso administrativo entregado por el API', () {
+      final response = ApiAuthResponse.fromJson({
+        'access_token': 'jwt',
+        'permissions': {'manage_device_authorizations': true},
+      });
+
+      expect(response.manageDeviceAuthorizations, isTrue);
+    });
+  });
+
+  group('AdministraciÃ³n de dispositivos', () {
+    test('usa dni_by_email sin incluir datos del dispositivo', () {
+      final user = AdminDirectoryUser.fromFirestore(
+        documentId: 'jgallegos@lasalle.edu.pe',
+        data: {
+          'dni': '70551254',
+          'name': 'Jhonny Gallegos',
+          'deviceId': 'no-debe-usarse',
+        },
+      );
+
+      expect(user.email, 'jgallegos@lasalle.edu.pe');
+      expect(user.dni, '70551254');
+      expect(user.displayName, 'Jhonny Gallegos');
+
+      final userWithSpanishName = AdminDirectoryUser.fromFirestore(
+        documentId: 'usuario@lasalle.edu.pe',
+        data: {'dni': '12345678', 'nombre': 'Usuario de prueba'},
+      );
+      expect(userWithSpanishName.displayName, 'Usuario de prueba');
+    });
+
+    test('normaliza y elimina DNIs repetidos antes de enviarlos', () {
+      final codes = parseEmpCodes('70551254, 12345678 70551254;\n87654321');
+
+      expect(codes, ['70551254', '12345678', '87654321']);
+    });
+
+    test('autoriza renovaciones con JWT interno y vencimiento Lima', () async {
+      final client = ApiClient(
+        tokenProvider: ({required forceRefresh, rejectedToken}) async {
+          expect(forceRefresh, isFalse);
+          return 'jwt-interno';
+        },
+        httpClient: MockClient((request) async {
+          expect(request.url.path, '/api/admin/device-renewals/authorize');
+          expect(request.headers['Authorization'], 'Bearer jwt-interno');
+          expect(request.headers['Content-Type'], 'application/json');
+
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          expect(body['emp_codes'], ['70551254', '12345678']);
+          expect(body['expires_at'], '2026-08-31T23:59:59-05:00');
+          expect(body['reason'], 'Cambio de equipo');
+
+          return http.Response('''{
+            "authorized": [
+              {
+                "emp_code": "70551254",
+                "email": "usuario@lasalle.edu.pe",
+                "authorization_id": "authorization-1"
+              }
+            ],
+            "failed": [
+              {"emp_code": "12345678", "detail": "Usuario no encontrado"}
+            ]
+          }''', 200);
+        }),
+      );
+      final service = DeviceRenewalApiService(
+        baseUrl: 'https://api.test',
+        client: client,
+      );
+
+      final result = await service.authorize(
+        empCodes: ['70551254', '12345678'],
+        expiresAt: DateTime(2026, 8, 31, 23, 59, 59),
+        reason: ' Cambio de equipo ',
+      );
+
+      expect(result.authorized.single.empCode, '70551254');
+      expect(result.failed.single.detail, 'Usuario no encontrado');
+      expect(result.isRevocation, isFalse);
+      client.close();
+    });
+
+    test('identifica un resultado de revocación por DNI', () {
+      final result = DeviceRenewalActionResult.fromJson({
+        'revoked': [
+          {'emp_code': '70551254', 'email': 'usuario@lasalle.edu.pe'},
+        ],
+        'failed': [],
+      });
+
+      expect(result.isRevocation, isTrue);
+      expect(result.authorized.single.empCode, '70551254');
+    });
+
+    test('mapea 403 administrativo a un mensaje controlado', () async {
+      final client = ApiClient(
+        tokenProvider: ({required forceRefresh, rejectedToken}) async => 'jwt',
+        httpClient: MockClient(
+          (_) async => http.Response('{"detail":"forbidden"}', 403),
+        ),
+      );
+      final service = DeviceRenewalApiService(
+        baseUrl: 'https://api.test',
+        client: client,
+      );
+
+      await expectLater(
+        service.getStatus('70551254'),
+        throwsA(
+          isA<AppException>().having(
+            (error) => error.code,
+            'code',
+            'ADMIN-DEVICE-403',
+          ),
+        ),
+      );
+      client.close();
+    });
+
+    test('interpreta el estado de renovaciÃ³n sin datos de dispositivo', () {
+      final status = DeviceRenewalStatus.fromJson({
+        'emp_code': '70551254',
+        'email': 'usuario@lasalle.edu.pe',
+        'device_replacement': {
+          'allowed': true,
+          'authorizationId': 'authorization-1',
+          'expiresAt': '2026-08-31T23:59:59-05:00',
+          'reason': 'Cambio de equipo',
+          'usedAt': null,
+        },
+      });
+
+      expect(status.deviceReplacement?.allowed, isTrue);
+      expect(status.deviceReplacement?.authorizationId, 'authorization-1');
+      expect(status.deviceReplacement?.expiresAt, isNotNull);
     });
   });
 
