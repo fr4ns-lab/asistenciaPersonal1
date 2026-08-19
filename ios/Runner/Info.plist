@@ -40,11 +40,11 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>This app needs access to location when open.</string>
+	<string>SalleTime utiliza tu ubicación cuando registras tu asistencia para verificar que te encuentras dentro del área autorizada del Colegio La Salle. Por ejemplo, la ubicación se consulta cuando presionas el botón para registrar tu marcación.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>La app usa la ubicación para registrar la asistencia del personal y verificar que el marcado se realice desde una ubicación autorizada.</string>
+	<string>SalleTime utiliza tu ubicación cuando registras tu asistencia para verificar que te encuentras dentro del área autorizada del Colegio La Salle. Por ejemplo, la ubicación se consulta cuando presionas el botón para registrar tu marcación.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
