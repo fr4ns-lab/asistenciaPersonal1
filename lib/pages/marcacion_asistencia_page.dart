@@ -1036,10 +1036,13 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
 
   Future<void> _refreshLastMark() async {
     try {
-      final dashboard = await _dashboardApi.getMyDashboard(month: LimaTime.now());
+      final dashboard = await _dashboardApi.getMyDashboard(
+        month: LimaTime.now(),
+      );
       final lastMarkTime = _latestCheckinTime(
-        dashboard.recentCheckins
-            .map((item) => (date: item.punchDate, time: item.punchTime)),
+        dashboard.recentCheckins.map(
+          (item) => (date: item.punchDate, time: item.punchTime),
+        ),
       );
       if (!mounted) return;
 
@@ -1051,7 +1054,9 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
     }
   }
 
-  DateTime? _latestCheckinTime(Iterable<({String date, String time})> checkins) {
+  DateTime? _latestCheckinTime(
+    Iterable<({String date, String time})> checkins,
+  ) {
     DateTime? latest;
     for (final checkin in checkins) {
       final parsed = _parseDashboardCheckinTime(checkin.date, checkin.time);
@@ -1063,12 +1068,12 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
   }
 
   DateTime? _parseDashboardCheckinTime(String date, String time) {
-    final dateMatch = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(
-      date.trim(),
-    );
-    final timeMatch = RegExp(r'^(\d{1,2}):(\d{2})(?::(\d{2}))?$').firstMatch(
-      time.trim(),
-    );
+    final dateMatch = RegExp(
+      r'^(\d{4})-(\d{2})-(\d{2})$',
+    ).firstMatch(date.trim());
+    final timeMatch = RegExp(
+      r'^(\d{1,2}):(\d{2})(?::(\d{2}))?$',
+    ).firstMatch(time.trim());
     if (dateMatch == null || timeMatch == null) return null;
 
     return DateTime(
@@ -1343,7 +1348,14 @@ class _MarcacionAsistenciaPageState extends State<MarcacionAsistenciaPage>
       backgroundColor: const Color(0xFFF4F8FF),
       appBar: AppBar(
         centerTitle: false,
-        backgroundColor: Colors.transparent,
+        backgroundColor: const Color(0xFFF4F8FF),
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        systemOverlayStyle: SystemUiOverlayStyle.dark.copyWith(
+          statusBarColor: const Color(0xFFF4F8FF),
+          statusBarIconBrightness: Brightness.dark,
+          statusBarBrightness: Brightness.light,
+        ),
         title: Text(
           'SalleTime',
           style: theme.textTheme.headlineSmall?.copyWith(
