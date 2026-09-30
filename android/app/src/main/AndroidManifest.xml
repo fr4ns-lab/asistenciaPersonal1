@@ -1,8 +1,18 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 <uses-permission android:name="android.permission.INTERNET"/>
 <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
 <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+<!-- SalleTime no ejecuta ubicación en segundo plano. El plugin geolocator
+     declara este permiso por defecto; se elimina del APK final para cumplir
+     con la política de Google Play sobre foreground services. -->
+<uses-permission
+    android:name="android.permission.FOREGROUND_SERVICE_LOCATION"
+    tools:node="remove" />
     <application android:label="SalleTime" android:name="${applicationName}" android:icon="@mipmap/ic_launcher">
+        <service
+            android:name="com.baseflow.geolocator.GeolocatorLocationService"
+            tools:node="remove" />
         <meta-data android:name="com.google.android.geo.API_KEY" android:value="AIzaSyCEH1zI3T50-TRb4Oq_A5YWhdIXxuXfJG8"/>
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:taskAffinity="" android:theme="@style/LaunchTheme" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode" android:hardwareAccelerated="true" android:windowSoftInputMode="adjustResize">
             <!-- Specifies an Android theme to apply to this Activity as soon as
