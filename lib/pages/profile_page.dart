@@ -1,5 +1,6 @@
 import 'package:asistenciapersonal1/services/auth_service.dart';
 import 'package:asistenciapersonal1/pages/device_renewal_admin_page.dart';
+import 'package:asistenciapersonal1/pages/admin_location_page.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -102,6 +103,23 @@ class ProfilePage extends StatelessWidget {
                         () => Navigator.of(context).push(
                           MaterialPageRoute<void>(
                             builder: (_) => const DeviceRenewalAdminPage(),
+                          ),
+                        ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 6,
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.location_searching_rounded),
+                    title: const Text('Ubicación y perímetro'),
+                    subtitle: const Text('Ver GPS y recopilar puntos'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap:
+                        () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const AdminLocationPage(),
                           ),
                         ),
                     contentPadding: const EdgeInsets.symmetric(

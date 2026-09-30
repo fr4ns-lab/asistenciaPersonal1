@@ -137,7 +137,10 @@ class AuthService {
     }
   }
 
-  Future<String?> _fetchPhotoFromUserInfo(String accessToken) async {
+  Future<String?> _fetchPhotoFromUserInfo(
+    String accessToken,
+    BuildContext context,
+  ) async {
     try {
       final res = await http.get(
         Uri.parse('https://www.googleapis.com/oauth2/v3/userinfo'),
@@ -157,6 +160,20 @@ class AuthService {
 
       if (picture == null || picture.trim().isEmpty) return null;
       return picture.trim();
+    } on GoogleSignInException catch (e) {
+      debugPrint('Error de Google Sign-In: ${e.code} - $e');
+      // En Android, Credential Manager puede devolver `canceled` también
+      // cuando falla la reautenticación por una configuración OAuth/SHA
+      // incompleta. No siempre significa que el usuario canceló.
+      if (context.mounted) {
+        _showSnack(
+          context,
+          e.code == GoogleSignInExceptionCode.canceled
+              ? 'Google no pudo validar esta cuenta. Verifica la cuenta seleccionada y que la huella SHA-1/SHA-256 de esta versión esté registrada en Firebase.'
+              : 'No se pudo completar el inicio de sesión con Google. Inténtalo nuevamente.',
+        );
+      }
+      return null;
     } catch (e) {
       debugPrint('Error userinfo photo: $e');
       return null;
